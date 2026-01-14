@@ -45,15 +45,20 @@ function App() {
         <div className="text-center max-w-md">
           <h1 className="text-2xl font-bold text-gray-900 mb-4">Configuración Requerida</h1>
           <p className="text-gray-600 mb-4">
-            Las variables de entorno de Supabase no están configuradas. Por favor, configura los secrets en GitHub:
+            Las variables de entorno de Supabase no están configuradas correctamente. Por favor, verifica los secrets en GitHub:
           </p>
           <ul className="text-left text-sm text-gray-600 mb-4 space-y-2">
-            <li>• VITE_SUPABASE_URL</li>
-            <li>• VITE_SUPABASE_ANON_KEY</li>
+            <li>• <strong>VITE_SUPABASE_URL</strong>: Debe empezar con https://</li>
+            <li>• <strong>VITE_SUPABASE_ANON_KEY</strong>: Debe ser una clave válida de Supabase</li>
           </ul>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-gray-500 mb-4">
             Ve a Settings → Secrets and variables → Actions en tu repositorio de GitHub.
           </p>
+          <div className="text-xs text-gray-400 mt-4 p-3 bg-gray-50 rounded">
+            <p className="font-semibold mb-2">Debug info:</p>
+            <p>URL configurada: {import.meta.env.VITE_SUPABASE_URL ? 'Sí' : 'No'}</p>
+            <p>Key configurada: {import.meta.env.VITE_SUPABASE_ANON_KEY ? `Sí (${import.meta.env.VITE_SUPABASE_ANON_KEY.length} chars)` : 'No'}</p>
+          </div>
         </div>
       </div>
     )
