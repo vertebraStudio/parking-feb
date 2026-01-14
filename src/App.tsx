@@ -14,9 +14,18 @@ function App() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // Si Supabase no está configurado, no intentar conectarse
+    if (!isSupabaseConfigured) {
+      setLoading(false)
+      return
+    }
+
     // Verificar sesión actual
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
+      setLoading(false)
+    }).catch((error) => {
+      console.error('Error getting session:', error)
       setLoading(false)
     })
 
@@ -28,7 +37,7 @@ function App() {
     })
 
     return () => subscription.unsubscribe()
-  }, [])
+  }, [isSupabaseConfigured])
 
   if (!isSupabaseConfigured) {
     return (
