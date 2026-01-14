@@ -345,8 +345,9 @@ export default function ParkingMap({
                   opacity: 0.8,
                 }),
                 ...(!isPastDate && isFree && {
-                  borderColor: 'rgba(0, 0, 0, 0.1)',
+                  borderColor: spot.is_executive ? '#111C4E' : 'rgba(0, 0, 0, 0.1)',
                   backgroundColor: '#FFFFFF',
+                  borderWidth: spot.is_executive ? '2px' : '1px',
                 }),
               }}
             >
