@@ -5,6 +5,7 @@ on:
     branches:
       - main
   workflow_dispatch:
+  # Permitir ejecución manual desde la UI de GitHub
 
 permissions:
   contents: read
