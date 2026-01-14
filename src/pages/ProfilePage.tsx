@@ -246,7 +246,7 @@ export default function ProfilePage() {
     setProcessing(true)
     try {
       // Si se está asignando el rol de directivo
-      if (newRole === 'directivo' && user.role !== 'directivo') {
+      if (newRole === 'directivo' && user!.role !== 'directivo') {
         // 1. Buscar una plaza de directivo disponible
         const { data: availableSpots, error: spotsError } = await supabase
           .from('parking_spots')
@@ -315,7 +315,7 @@ export default function ProfilePage() {
       }
       
       // Si se está quitando el rol de directivo
-      if (user.role === 'directivo' && newRole !== 'directivo') {
+      if (user!.role === 'directivo' && newRole !== 'directivo') {
         // 1. Buscar la plaza asignada al usuario
         const { data: assignedSpots, error: spotsError } = await supabase
           .from('parking_spots')
@@ -462,11 +462,11 @@ export default function ProfilePage() {
                 fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
               }}
             >
-              {user.full_name || 'Usuario'}
+              {user!.full_name || 'Usuario'}
             </h2>
-            <p className="text-sm text-gray-600">{user.email}</p>
+            <p className="text-sm text-gray-600">{user!.email}</p>
             <div className="flex items-center gap-2 mt-2">
-              {user.role === 'admin' && (
+              {user!.role === 'admin' && (
                 <span 
                   className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
                   style={{ backgroundColor: '#FF9500' }}
@@ -474,7 +474,7 @@ export default function ProfilePage() {
                   ADMINISTRADOR
                 </span>
               )}
-              {user.role === 'directivo' && (
+              {user!.role === 'directivo' && (
                 <span 
                   className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
                   style={{ backgroundColor: '#111C4E' }}
@@ -482,7 +482,7 @@ export default function ProfilePage() {
                   DIRECTIVO
                 </span>
               )}
-              {user.is_verified && user.role === 'user' && (
+              {user!.is_verified && user!.role === 'user' && (
                 <span 
                   className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px] flex items-center gap-1"
                   style={{ backgroundColor: '#34C759' }}
@@ -500,7 +500,7 @@ export default function ProfilePage() {
               <label className="text-sm font-semibold text-gray-700 mb-2 block">Rol del usuario</label>
               <div className="flex items-center gap-2">
                 <select
-                  value={user.role}
+                  value={user!.role}
                   onChange={(e) => {
                     setNewRole(e.target.value as 'user' | 'directivo' | 'admin')
                     setShowRoleModal(true)
@@ -520,12 +520,12 @@ export default function ProfilePage() {
             <button
               onClick={handleVerifyUser}
               className={`w-full px-4 py-2.5 rounded-[14px] font-semibold transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 ${
-                user.is_verified
+                user!.is_verified
                   ? 'border border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100'
                   : 'text-white'
               }`}
               style={
-                !user.is_verified
+                !user!.is_verified
                   ? {
                       backgroundColor: '#34C759',
                       boxShadow: '0 2px 8px rgba(52, 199, 89, 0.3)'
@@ -533,7 +533,7 @@ export default function ProfilePage() {
                   : {}
               }
             >
-              {user.is_verified ? (
+              {user!.is_verified ? (
                 <>
                   <XCircle className="w-4 h-4" strokeWidth={2.5} />
                   Desverificar Usuario
@@ -766,7 +766,7 @@ export default function ProfilePage() {
         title={user?.is_verified ? 'Desverificar Usuario' : 'Verificar Usuario'}
         message={
           user
-            ? `¿Estás seguro de que deseas ${user.is_verified ? 'desverificar' : 'verificar'} a ${user.full_name || user.email}?`
+            ? `¿Estás seguro de que deseas ${user!.is_verified ? 'desverificar' : 'verificar'} a ${user!.full_name || user!.email}?`
             : ''
         }
         confirmText={user?.is_verified ? 'Sí, desverificar' : 'Sí, verificar'}
@@ -782,7 +782,7 @@ export default function ProfilePage() {
         title="Cambiar Rol de Usuario"
         message={
           user
-            ? `¿Estás seguro de que deseas cambiar el rol de ${user.full_name || user.email} de "${user.role === 'admin' ? 'Administrador' : user.role === 'directivo' ? 'Directivo' : 'Usuario'}" a "${newRole === 'admin' ? 'Administrador' : newRole === 'directivo' ? 'Directivo' : 'Usuario'}"?`
+            ? `¿Estás seguro de que deseas cambiar el rol de ${user!.full_name || user!.email} de "${user!.role === 'admin' ? 'Administrador' : user!.role === 'directivo' ? 'Directivo' : 'Usuario'}" a "${newRole === 'admin' ? 'Administrador' : newRole === 'directivo' ? 'Directivo' : 'Usuario'}"?`
             : ''
         }
         confirmText="Sí, cambiar rol"
