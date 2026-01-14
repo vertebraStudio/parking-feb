@@ -1,5 +1,4 @@
-import React from 'react'
-import { Car, Lock, Clock, Unlock } from 'lucide-react'
+import { Car, Lock, Clock } from 'lucide-react'
 import { ParkingSpot, Booking, SpotBlock, Profile } from '../types'
 import { cn } from '../lib/utils'
 

@@ -240,12 +240,6 @@ export default function ProfilePage() {
     }
   }
 
-  const handleChangeRole = () => {
-    if (!user) return
-    setNewRole(user.role as 'user' | 'directivo' | 'admin')
-    setShowRoleModal(true)
-  }
-
   const confirmChangeRole = async () => {
     if (!user) return
 

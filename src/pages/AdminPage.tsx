@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, Lock, Unlock, CheckCircle, XCircle, Calendar, Car, Shield, X, Clock, User } from 'lucide-react'
+import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, X, Clock, User } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Profile, ParkingSpot, Booking, SpotBlock } from '../types'
 import ConfirmModal from '../components/ui/ConfirmModal'
@@ -864,7 +864,7 @@ export default function AdminPage() {
                         <Users className="w-4 h-4 text-gray-600" strokeWidth={2} />
                         {booking.user ? (
                           <button
-                            onClick={() => navigate(`/profile/${booking.user.id}`)}
+                            onClick={() => navigate(`/profile/${booking.user!.id}`)}
                             className="text-sm text-gray-600 hover:text-orange-600 transition-colors underline decoration-dotted underline-offset-2"
                             title="Ver perfil del usuario"
                           >

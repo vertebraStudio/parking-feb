@@ -9,7 +9,6 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [userProfile, setUserProfile] = useState<Profile | null>(null)
-  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     loadUserProfile()
@@ -19,7 +18,6 @@ export default function Layout() {
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session || !session.user) {
-        setLoading(false)
         return
       }
 
@@ -31,15 +29,12 @@ export default function Layout() {
 
       if (error) {
         console.error('Error loading profile:', error)
-        setLoading(false)
         return
       }
 
       setUserProfile(profile)
     } catch (error) {
       console.error('Error loading user profile:', error)
-    } finally {
-      setLoading(false)
     }
   }
 

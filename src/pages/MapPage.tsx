@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { format, addDays, subDays, isBefore, startOfDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import ParkingMap from '../components/ParkingMap'
@@ -754,10 +754,6 @@ export default function MapPage() {
     })
 
     return freeCount
-  }
-
-  const getDaysWithBookings = (): string[] => {
-    return userBookings.map(b => b.date)
   }
 
   const handlePreviousDay = () => {
