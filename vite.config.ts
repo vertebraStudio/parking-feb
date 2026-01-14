@@ -21,8 +21,8 @@ export default defineConfig({
         background_color: '#ffffff',
         display: 'standalone',
         orientation: 'portrait',
-        scope: '/',
-        start_url: '/',
+        scope: '/parking-feb/',
+        start_url: '/parking-feb/',
         icons: [
           {
             src: 'pwa-192x192.png',

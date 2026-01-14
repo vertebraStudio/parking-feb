@@ -7,7 +7,7 @@ import MapPage from './pages/MapPage'
 import BookingsPage from './pages/BookingsPage'
 import AdminPage from './pages/AdminPage'
 import ProfilePage from './pages/ProfilePage'
-import { supabase } from './lib/supabase'
+import { supabase, isSupabaseConfigured } from './lib/supabase'
 
 function App() {
   const [session, setSession] = useState<any>(null)
@@ -29,6 +29,26 @@ function App() {
 
     return () => subscription.unsubscribe()
   }, [])
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center p-4">
+        <div className="text-center max-w-md">
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">Configuración Requerida</h1>
+          <p className="text-gray-600 mb-4">
+            Las variables de entorno de Supabase no están configuradas. Por favor, configura los secrets en GitHub:
+          </p>
+          <ul className="text-left text-sm text-gray-600 mb-4 space-y-2">
+            <li>• VITE_SUPABASE_URL</li>
+            <li>• VITE_SUPABASE_ANON_KEY</li>
+          </ul>
+          <p className="text-xs text-gray-500">
+            Ve a Settings → Secrets and variables → Actions en tu repositorio de GitHub.
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   if (loading) {
     return (
