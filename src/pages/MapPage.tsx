@@ -901,7 +901,7 @@ export default function MapPage() {
             {/* Botón día siguiente */}
             <button
               onClick={handleNextDay}
-              className="flex-shrink-0 p-2.5 rounded-[14px] transition-all duration-200 active:scale-95 bg-white border border-gray-300"
+              className="flex-shrink-0 p-3 rounded-[14px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50"
               title="Día siguiente"
             >
               <ChevronRight className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
@@ -909,9 +909,9 @@ export default function MapPage() {
           </div>
 
           {/* Información de fecha y badge de reserva */}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 mt-1">
             <p 
-              className="text-sm font-medium text-gray-700"
+              className="text-sm font-medium text-gray-600 flex-1 min-w-0"
               style={{ 
                 fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
                 letterSpacing: '0.2px'
