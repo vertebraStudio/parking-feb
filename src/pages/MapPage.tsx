@@ -838,25 +838,25 @@ export default function MapPage() {
       <div className="mb-6">
         {/* Contenedor para el selector */}
         <div 
-          className="bg-gray-50 rounded-[20px] p-4 border border-gray-200"
+          className="bg-gray-50 rounded-[20px] p-4 sm:p-5 border border-gray-200"
         >
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-3 mb-4">
             {/* Botón día anterior */}
             <button
               onClick={handlePreviousDay}
-              className="flex-shrink-0 p-2.5 rounded-[14px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50"
+              className="flex-shrink-0 p-3 rounded-[14px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50"
               title="Día anterior"
             >
               <ChevronLeft className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
             </button>
 
             {/* Input de fecha minimalista estilo iOS */}
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-0">
               <input
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-full px-4 py-3 rounded-[14px] focus:outline-none transition-all duration-200 text-gray-900 font-medium bg-white border"
+                className="w-full px-4 py-3.5 rounded-[14px] focus:outline-none transition-all duration-200 text-gray-900 font-medium bg-white border text-base"
                 style={{
                   borderColor: hasBookingOnDate(selectedDate) 
                     ? (getBookingStatusOnDate(selectedDate) === 'pending' ? '#FFB800' : '#FF9500')
