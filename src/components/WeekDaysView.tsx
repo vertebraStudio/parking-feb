@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { format, startOfWeek, addDays, isSameDay } from 'date-fns'
+import { format, addDays, isSameDay } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Calendar, Users, Clock, ChevronRight, UserPlus, Lock } from 'lucide-react'
 import { Booking, Profile, SpotBlock } from '../types'
@@ -119,7 +118,6 @@ export default function WeekDaysView({
       {weekDays.map((day) => {
         const dateString = format(day, 'yyyy-MM-dd')
         const dayName = format(day, 'EEEE', { locale: es })
-        const dayNumber = format(day, 'd')
         const isToday = isSameDay(day, new Date())
         const isPast = isPastDate(day)
         const bookingsCount = getBookingsCount(dateString)

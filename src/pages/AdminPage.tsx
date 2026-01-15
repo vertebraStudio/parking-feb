@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, X, Clock, User, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, UserPlus, BarChart3 } from 'lucide-react'
-import { format, startOfWeek, addDays, getDay, subDays, isSameWeek } from 'date-fns'
+import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3 } from 'lucide-react'
+import { format, startOfWeek, addDays, getDay, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '../lib/supabase'
 import { Profile, ParkingSpot, Booking, SpotBlock } from '../types'
@@ -27,7 +27,6 @@ export default function AdminPage() {
     const today = new Date()
     return startOfWeek(today, { weekStartsOn: 1 })
   })
-  const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = todas las fechas (para bookings)
   const [selectedWeekMonday, setSelectedWeekMonday] = useState<Date>(() => {
     const today = new Date()
     return startOfWeek(today, { weekStartsOn: 1 })
