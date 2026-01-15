@@ -61,6 +61,39 @@ export default function AdminPage() {
     }
   }, [user])
 
+  // Suscripción en tiempo real a cambios en bookings para actualizar el resumen
+  useEffect(() => {
+    if (!user || user.role !== 'admin') return
+
+    const bookingsChannel = supabase
+      .channel('admin-bookings-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'bookings',
+        },
+        () => {
+          // Si estamos en la pestaña de resumen, recargar los datos
+          if (activeTab === 'summary') {
+            loadBookingsForWeek(summaryWeekMonday)
+            loadProfiles()
+          }
+          // Si estamos en la pestaña de bookings, también recargar
+          if (activeTab === 'bookings') {
+            loadBookings()
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(bookingsChannel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, activeTab, summaryWeekMonday])
+
   useEffect(() => {
     if (user && user.role === 'admin' && activeTab === 'bookings' && !loadingBookingsRef.current) {
       console.log('Loading bookings - activeTab:', activeTab, 'selectedWeekMonday:', selectedWeekMonday)
@@ -79,6 +112,86 @@ export default function AdminPage() {
       loadSpotBlocks()
     }
   }, [selectedSpotDate, activeTab, user, spots])
+
+  // Función para cargar bookings de una semana específica (para el resumen)
+  const loadBookingsForWeek = async (weekMonday: Date) => {
+    setLoadingBookings(true)
+    setError(null)
+    try {
+      const monday = new Date(weekMonday)
+      const friday = addDays(monday, 4)
+      const mondayString = format(monday, 'yyyy-MM-dd')
+      const fridayString = format(friday, 'yyyy-MM-dd')
+
+      const { data: bookingsData, error: bookingsError } = await supabase
+        .from('bookings')
+        .select('*')
+        .gte('date', mondayString)
+        .lte('date', fridayString)
+        .neq('status', 'cancelled') // Excluir canceladas
+        .order('date', { ascending: true })
+
+      if (bookingsError) {
+        console.error('Error loading bookings for summary:', bookingsError)
+        setError(`Error al cargar reservas: ${bookingsError.message}`)
+        return
+      }
+
+      // Cargar información de usuarios
+      if (bookingsData && bookingsData.length > 0) {
+        const userIds = [...new Set(bookingsData.map(b => b.user_id))]
+        const carpoolUserIds = bookingsData
+          .map(b => b.carpool_with_user_id)
+          .filter((id): id is string => id !== null)
+        const allUserIds = [...new Set([...userIds, ...carpoolUserIds])]
+
+        const { data: usersData } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', allUserIds)
+
+        let carpoolProfilesMap = new Map<string, Profile>()
+        if (carpoolUserIds.length > 0 && usersData) {
+          usersData.forEach(profile => {
+            if (carpoolUserIds.includes(profile.id)) {
+              carpoolProfilesMap.set(profile.id, profile)
+            }
+          })
+        }
+
+        const bookingsWithDetails: BookingWithSpot[] = bookingsData.map(booking => ({
+          ...booking,
+          spot: undefined,
+          user: usersData?.find(u => u.id === booking.user_id),
+          carpoolUser: booking.carpool_with_user_id ? carpoolProfilesMap.get(booking.carpool_with_user_id) : undefined
+        }))
+
+        // Filtrar reservas de directivos
+        const bookingsWithoutDirectivos = bookingsWithDetails.filter(booking => {
+          return booking.user?.role !== 'directivo'
+        })
+
+        setBookings(bookingsWithoutDirectivos)
+      } else {
+        setBookings([])
+      }
+    } catch (error) {
+      console.error('Error loading bookings for summary:', error)
+      setError('Error al cargar reservas para el resumen')
+    } finally {
+      setLoadingBookings(false)
+    }
+  }
+
+  // Recargar datos cuando cambia la semana del resumen o se activa la pestaña
+  useEffect(() => {
+    if (user && user.role === 'admin' && activeTab === 'summary') {
+      // Cargar bookings y profiles para la semana del resumen
+      loadBookingsForWeek(summaryWeekMonday)
+      loadProfiles()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryWeekMonday, activeTab, user])
 
   const loadUser = async () => {
     try {
@@ -411,8 +524,13 @@ export default function AdminPage() {
       // Esperar un momento antes de recargar para asegurar que la BD se actualizó
       await new Promise(resolve => setTimeout(resolve, 200))
       
-      // Recargar las reservas
-      await loadBookings()
+      // Recargar las reservas según la pestaña activa
+      if (activeTab === 'summary') {
+        await loadBookingsForWeek(summaryWeekMonday)
+        await loadProfiles()
+      } else {
+        await loadBookings()
+      }
     } catch (err: any) {
       console.error('Error updating booking:', err)
       setError(err.message || 'Error al actualizar la reserva')
@@ -454,8 +572,13 @@ export default function AdminPage() {
       // Esperar un momento antes de recargar para asegurar que la BD se actualizó
       await new Promise(resolve => setTimeout(resolve, 200))
       
-      // Recargar las reservas
-      await loadBookings()
+      // Recargar las reservas según la pestaña activa
+      if (activeTab === 'summary') {
+        await loadBookingsForWeek(summaryWeekMonday)
+        await loadProfiles()
+      } else {
+        await loadBookings()
+      }
     } catch (err: any) {
       console.error('Error rejecting booking:', err)
       setError(err.message || 'Error al rechazar la reserva')
@@ -498,8 +621,13 @@ export default function AdminPage() {
       // Esperar un momento antes de recargar para asegurar que la BD se actualizó
       await new Promise(resolve => setTimeout(resolve, 200))
       
-      // Recargar las reservas
-      await loadBookings()
+      // Recargar las reservas según la pestaña activa
+      if (activeTab === 'summary') {
+        await loadBookingsForWeek(summaryWeekMonday)
+        await loadProfiles()
+      } else {
+        await loadBookings()
+      }
     } catch (err: any) {
       console.error('Error moving to waitlist:', err)
       setError(err.message || 'Error al mover a lista de espera')
@@ -750,14 +878,15 @@ export default function AdminPage() {
 
       {/* Tabs - iOS Style */}
       <div 
-        className="flex gap-2 mb-6 rounded-[20px] p-2 border border-gray-200 bg-gray-50"
+        className="flex gap-1.5 mb-6 rounded-[20px] p-1.5 border border-gray-200 bg-gray-50 overflow-x-auto"
+        style={{ WebkitOverflowScrolling: 'touch' }}
       >
         <button
           onClick={() => {
             setActiveTab('users')
             setError(null)
           }}
-          className={`px-4 py-2.5 font-semibold text-sm rounded-[14px] transition-all duration-200 active:scale-95 ${
+          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
             activeTab === 'users'
               ? 'text-white'
               : 'text-gray-700 hover:text-gray-900'
@@ -767,15 +896,15 @@ export default function AdminPage() {
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
           } : {}}
         >
-          <Users className="w-4 h-4 inline mr-2" strokeWidth={activeTab === 'users' ? 2.5 : 2} />
-          Usuarios
+          <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'users' ? 2.5 : 2} />
+          <span className="whitespace-nowrap">Usuarios</span>
         </button>
         <button
           onClick={() => {
             setActiveTab('spots')
             setError(null)
           }}
-          className={`px-4 py-2.5 font-semibold text-sm rounded-[14px] transition-all duration-200 active:scale-95 ${
+          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
             activeTab === 'spots'
               ? 'text-white'
               : 'text-gray-700 hover:text-gray-900'
@@ -785,15 +914,15 @@ export default function AdminPage() {
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
           } : {}}
         >
-          <Car className="w-4 h-4 inline mr-2" strokeWidth={activeTab === 'spots' ? 2.5 : 2} />
-          Plazas
+          <Car className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'spots' ? 2.5 : 2} />
+          <span className="whitespace-nowrap">Plazas</span>
         </button>
         <button
           onClick={() => {
             setActiveTab('bookings')
             setError(null)
           }}
-          className={`px-4 py-2.5 font-semibold text-sm rounded-[14px] transition-all duration-200 active:scale-95 ${
+          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
             activeTab === 'bookings'
               ? 'text-white'
               : 'text-gray-700 hover:text-gray-900'
@@ -803,15 +932,15 @@ export default function AdminPage() {
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
           } : {}}
         >
-          <Calendar className="w-4 h-4 inline mr-2" strokeWidth={activeTab === 'bookings' ? 2.5 : 2} />
-          Reservas
+          <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'bookings' ? 2.5 : 2} />
+          <span className="whitespace-nowrap">Reservas</span>
         </button>
         <button
           onClick={() => {
             setActiveTab('summary')
             setError(null)
           }}
-          className={`px-4 py-2.5 font-semibold text-sm rounded-[14px] transition-all duration-200 active:scale-95 ${
+          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
             activeTab === 'summary'
               ? 'text-white'
               : 'text-gray-700 hover:text-gray-900'
@@ -821,8 +950,8 @@ export default function AdminPage() {
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
           } : {}}
         >
-          <BarChart3 className="w-4 h-4 inline mr-2" strokeWidth={activeTab === 'summary' ? 2.5 : 2} />
-          Resumen
+          <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'summary' ? 2.5 : 2} />
+          <span className="whitespace-nowrap">Resumen</span>
         </button>
       </div>
 
@@ -1484,12 +1613,10 @@ export default function AdminPage() {
             }
             const dayLabels = ['L', 'M', 'X', 'J', 'V']
             
-            // Obtener usuarios normales (no directivos, no admins)
-            const normalUsers = profiles.filter(p => p.role === 'user' && p.is_verified)
-            
             // Crear mapa de reservas por usuario y día
             const bookingsMap = new Map<string, Map<string, BookingWithSpot>>()
             const dayTotals = new Map<string, number>()
+            const usersWithBookings = new Set<string>()
             
             // Inicializar totales por día
             weekDays.forEach(day => {
@@ -1498,28 +1625,59 @@ export default function AdminPage() {
             })
             
             // Procesar reservas confirmadas de la semana
-            bookings
-              .filter(b => {
-                const bookingDate = new Date(b.date)
-                const monday = new Date(summaryWeekMonday)
-                const friday = addDays(monday, 4)
-                return bookingDate >= monday && bookingDate <= friday && 
-                       b.status === 'confirmed' &&
-                       b.user?.role === 'user'
-              })
-              .forEach(booking => {
-                const userId = booking.user_id
-                const dateStr = booking.date
-                
-                if (!bookingsMap.has(userId)) {
-                  bookingsMap.set(userId, new Map())
-                }
+            // Filtrar y procesar todas las reservas confirmadas
+            const confirmedBookings = bookings.filter(b => {
+              if (b.status !== 'confirmed') return false
+              if (!b.user || b.user.role !== 'user') return false
+              
+              const bookingDate = new Date(b.date)
+              bookingDate.setHours(0, 0, 0, 0)
+              const monday = new Date(summaryWeekMonday)
+              monday.setHours(0, 0, 0, 0)
+              const friday = addDays(monday, 4)
+              friday.setHours(23, 59, 59, 999)
+              
+              return bookingDate >= monday && bookingDate <= friday
+            })
+            
+            console.log('Reservas confirmadas para el resumen:', confirmedBookings.length, confirmedBookings)
+            
+            confirmedBookings.forEach(booking => {
+              const userId = booking.user_id
+              const dateStr = booking.date
+              
+              if (!bookingsMap.has(userId)) {
+                bookingsMap.set(userId, new Map())
+              }
+              // Si ya existe una reserva para este usuario y día, mantener la más reciente
+              const existingBooking = bookingsMap.get(userId)!.get(dateStr)
+              if (!existingBooking || new Date(booking.created_at) > new Date(existingBooking.created_at)) {
                 bookingsMap.get(userId)!.set(dateStr, booking)
-                
-                // Incrementar total del día
-                const currentTotal = dayTotals.get(dateStr) || 0
-                dayTotals.set(dateStr, currentTotal + 1)
-              })
+              }
+              
+              // Añadir usuario a la lista de usuarios con reservas
+              usersWithBookings.add(userId)
+              
+              // Incrementar total del día
+              const currentTotal = dayTotals.get(dateStr) || 0
+              dayTotals.set(dateStr, currentTotal + 1)
+            })
+            
+            // Obtener usuarios normales (no directivos, no admins) que tienen reservas O todos los usuarios verificados
+            const normalUsers = profiles.filter(p => p.role === 'user' && p.is_verified)
+            
+            // Incluir también usuarios que tienen reservas pero pueden no estar en profiles aún
+            const allUserIds = new Set([...normalUsers.map(u => u.id), ...Array.from(usersWithBookings)])
+            const usersToShow = Array.from(allUserIds).map(userId => {
+              const profile = profiles.find(p => p.id === userId)
+              if (profile) return profile
+              // Si no está en profiles, crear un perfil temporal con la info de la reserva
+              const booking = confirmedBookings.find(b => b.user_id === userId)
+              if (booking && booking.user) {
+                return booking.user
+              }
+              return null
+            }).filter((u): u is Profile => u !== null)
             
             // Calcular totales por usuario
             const userTotals = new Map<string, number>()
@@ -1528,7 +1686,7 @@ export default function AdminPage() {
             })
             
             // Ordenar usuarios por total de plazas (descendente)
-            const sortedUsers = [...normalUsers].sort((a, b) => {
+            const sortedUsers = [...usersToShow].sort((a, b) => {
               const totalA = userTotals.get(a.id) || 0
               const totalB = userTotals.get(b.id) || 0
               return totalB - totalA
