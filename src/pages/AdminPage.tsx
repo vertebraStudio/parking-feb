@@ -1061,27 +1061,27 @@ export default function AdminPage() {
         <div className="space-y-4">
           {/* Selector de fecha y número de plazas */}
           <div 
-            className="rounded-[20px] p-4 border border-gray-200 bg-gray-50"
+            className="rounded-[20px] p-4 border border-gray-200 bg-gray-50 overflow-hidden"
           >
             <label className="block text-sm font-semibold text-gray-900 mb-3">
               Bloquear plazas
             </label>
             
             {/* Selector de fecha */}
-            <div className="mb-4">
+            <div className="mb-4 min-w-0">
               <label className="block text-xs font-medium text-gray-700 mb-2">
                 Seleccionar día
               </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Calendar className="h-5 w-5 text-gray-400" />
+              <div className="relative min-w-0">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none z-10">
+                  <Calendar className="h-4 w-4 sm:h-5 sm:w-5 text-gray-400" />
                 </div>
                 <input
                   type="date"
                   value={selectedSpotDate}
                   onChange={(e) => setSelectedSpotDate(e.target.value)}
                   min={new Date().toISOString().split('T')[0]}
-                  className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-[14px] focus:outline-none transition-colors text-gray-900 bg-white"
+                  className="w-full min-w-0 pl-9 sm:pl-10 pr-3 sm:pr-4 py-2.5 sm:py-3 border border-gray-300 rounded-[14px] focus:outline-none transition-colors text-gray-900 bg-white text-sm sm:text-base box-border"
                   onFocus={(e) => {
                     e.target.style.borderColor = '#FF9500'
                     e.target.style.boxShadow = '0 0 0 3px rgba(255, 149, 0, 0.1)'
@@ -1090,10 +1090,11 @@ export default function AdminPage() {
                     e.target.style.borderColor = '#D1D5DB'
                     e.target.style.boxShadow = 'none'
                   }}
+                  style={{ maxWidth: '100%' }}
                 />
               </div>
               <div className="mt-2">
-                <p className="text-sm font-medium text-gray-700">
+                <p className="text-xs sm:text-sm font-medium text-gray-700 break-words">
                   {formatDateDisplay(selectedSpotDate)}
                 </p>
               </div>
