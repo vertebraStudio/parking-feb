@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { User, LogOut, Calendar, CheckCircle, Clock, TrendingUp, BarChart3, ArrowLeft, XCircle, Car, ChevronDown, ChevronUp } from 'lucide-react'
+import { User, LogOut, Calendar, CheckCircle, Clock, TrendingUp, BarChart3, ArrowLeft, XCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Profile, Booking, ParkingSpot } from '../types'
 import ConfirmModal from '../components/ui/ConfirmModal'

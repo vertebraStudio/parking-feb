@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3 } from 'lucide-react'
-import { format, startOfWeek, addDays, getDay, subDays } from 'date-fns'
+import { format, startOfWeek, addDays, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '../lib/supabase'
 import { Profile, ParkingSpot, Booking, SpotBlock } from '../types'
@@ -49,7 +49,7 @@ export default function AdminPage() {
   const [bookingToWaitlist, setBookingToWaitlist] = useState<BookingWithSpot | null>(null)
   const [processing, setProcessing] = useState(false)
   const loadingBookingsRef = useRef(false)
-  const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set())
+  // const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set()) // Eliminado - no se usa
 
   useEffect(() => {
     loadUser()
@@ -303,9 +303,10 @@ export default function AdminPage() {
     }
   }
 
-  const isSpotBlocked = (spotId: number): boolean => {
-    return spotBlocks.some(block => block.spot_id === spotId)
-  }
+  // Función eliminada - no se usa
+  // const isSpotBlocked = (spotId: number): boolean => {
+  //   return spotBlocks.some(block => block.spot_id === spotId)
+  // }
 
   const handleBlockSpots = () => {
     if (!selectedSpotDate) {
@@ -422,10 +423,11 @@ export default function AdminPage() {
     }
   }
 
-  const handleRejectBooking = (booking: BookingWithSpot) => {
-    setBookingToReject(booking)
-    setShowRejectBookingModal(true)
-  }
+  // Función eliminada - no se usa (ya no hay botón de rechazar)
+  // const handleRejectBooking = (booking: BookingWithSpot) => {
+  //   setBookingToReject(booking)
+  //   setShowRejectBookingModal(true)
+  // }
 
   const confirmRejectBooking = async () => {
     if (!bookingToReject) return
@@ -588,67 +590,59 @@ export default function AdminPage() {
     }
   }
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
-    const months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
-    return `${days[date.getDay()]}, ${date.getDate()} ${months[date.getMonth()]}`
-  }
+  // Función eliminada - no se usa
+  // const formatDate = (dateString: string) => {
+  //   const date = new Date(dateString)
+  //   const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+  //   const months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+  //   return `${days[date.getDay()]}, ${date.getDate()} ${months[date.getMonth()]}`
+  // }
 
-  // Agrupar reservas por usuario
-  const groupBookingsByUser = () => {
-    const grouped = new Map<string, BookingWithSpot[]>()
-    
-    // Primero filtrar las reservas
-    // NO mostrar reservas canceladas - si el usuario las canceló, se muestran como "no solicitadas"
-    const filteredBookings = bookings.filter(booking => {
-      // Excluir reservas canceladas (el usuario las canceló, no hay nada que hacer)
-      if (booking.status === 'cancelled') {
-        return false
-      }
-      // Mostrar todas las reservas activas (pending, confirmed, waitlist)
-      return booking.status === 'pending' || booking.status === 'confirmed' || booking.status === 'waitlist'
-    })
-    
-    // Agrupar por usuario
-    filteredBookings.forEach(booking => {
-      const userId = booking.user_id
-      if (!grouped.has(userId)) {
-        grouped.set(userId, [])
-      }
-      grouped.get(userId)!.push(booking)
-    })
-    
-    return Array.from(grouped.entries()).map(([userId, userBookings]) => ({
-      userId,
-      user: userBookings[0].user,
-      bookings: userBookings.sort((a, b) => a.date.localeCompare(b.date))
-    }))
-  }
+  // Función eliminada - no se usa
+  // const groupBookingsByUser = () => {
+  //   const grouped = new Map<string, BookingWithSpot[]>()
+  //   const filteredBookings = bookings.filter(booking => {
+  //     if (booking.status === 'cancelled') {
+  //       return false
+  //     }
+  //     return booking.status === 'pending' || booking.status === 'confirmed' || booking.status === 'waitlist'
+  //   })
+  //   filteredBookings.forEach(booking => {
+  //     const userId = booking.user_id
+  //     if (!grouped.has(userId)) {
+  //       grouped.set(userId, [])
+  //     }
+  //     grouped.get(userId)!.push(booking)
+  //   })
+  //   return Array.from(grouped.entries()).map(([userId, userBookings]) => ({
+  //     userId,
+  //     user: userBookings[0].user,
+  //     bookings: userBookings.sort((a, b) => a.date.localeCompare(b.date))
+  //   }))
+  // }
 
-  // Obtener el día de la semana (0 = Lunes, 4 = Viernes)
-  const getWeekDayIndex = (dateString: string): number | null => {
-    const date = new Date(dateString)
-    const day = getDay(date) // 0 = Domingo, 1 = Lunes, ..., 6 = Sábado
-    // Convertir a índice de semana laboral: Lunes = 0, Viernes = 4
-    if (day === 0) return null // Domingo
-    if (day >= 1 && day <= 5) return day - 1 // Lunes a Viernes
-    return null // Sábado
-  }
+  // Función eliminada - no se usa
+  // const getWeekDayIndex = (dateString: string): number | null => {
+  //   const date = new Date(dateString)
+  //   const day = getDay(date)
+  //   if (day === 0) return null
+  //   if (day >= 1 && day <= 5) return day - 1
+  //   return null
+  // }
 
   // Obtener las letras de los días (L, M, X, J, V)
   const getDayLetters = () => ['L', 'M', 'X', 'J', 'V']
 
-  // Toggle expandir/colapsar usuario
-  const toggleUserExpansion = (userId: string) => {
-    const newExpanded = new Set(expandedUsers)
-    if (newExpanded.has(userId)) {
-      newExpanded.delete(userId)
-    } else {
-      newExpanded.add(userId)
-    }
-    setExpandedUsers(newExpanded)
-  }
+  // Función eliminada - no se usa
+  // const toggleUserExpansion = (userId: string) => {
+  //   const newExpanded = new Set(expandedUsers)
+  //   if (newExpanded.has(userId)) {
+  //     newExpanded.delete(userId)
+  //   } else {
+  //     newExpanded.add(userId)
+  //   }
+  //   setExpandedUsers(newExpanded)
+  // }
 
   const formatDateDisplay = (dateString: string | null) => {
     if (!dateString) return 'Todas las fechas'

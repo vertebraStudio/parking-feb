@@ -268,7 +268,7 @@ export default function BookingsPage() {
       // Cargar todos los usuarios verificados, excluyendo al usuario actual
       const { data: profilesData, error } = await supabase
         .from('profiles')
-        .select('id, full_name, email')
+        .select('*')
         .eq('is_verified', true)
         .neq('id', user?.id || '')
         .order('full_name', { ascending: true, nullsFirst: false })
@@ -277,7 +277,7 @@ export default function BookingsPage() {
         console.error('Error loading carpool users:', error)
         setAvailableCarpoolUsers([])
       } else {
-        setAvailableCarpoolUsers(profilesData || [])
+        setAvailableCarpoolUsers((profilesData || []) as Profile[])
       }
     } catch (err) {
       console.error('Error loading carpool users:', err)

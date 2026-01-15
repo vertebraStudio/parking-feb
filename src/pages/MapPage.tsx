@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { format, addDays, subDays, isBefore, startOfDay, startOfWeek, endOfWeek, isSameWeek } from 'date-fns'
+import { format, addDays, subDays, isBefore, startOfDay, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
 import ParkingMap from '../components/ParkingMap'
 import WeekDaysView from '../components/WeekDaysView'
@@ -14,7 +14,7 @@ export default function MapPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [spots, setSpots] = useState<ParkingSpot[]>([])
-  const [bookings, setBookings] = useState<Booking[]>([])
+  // const [bookings, setBookings] = useState<Booking[]>([]) // Eliminado - no se usa, solo se usa bookingsWithUsers
   const [bookingsWithUsers, setBookingsWithUsers] = useState<(Booking & { user?: Profile; carpoolUser?: Profile })[]>([])
   const [userBookings, setUserBookings] = useState<Booking[]>([]) // Todas las reservas del usuario
   const [spotBlocks, setSpotBlocks] = useState<SpotBlock[]>([]) // Bloqueos por fecha
@@ -333,10 +333,8 @@ export default function MapPage() {
           console.warn('Error de permisos al cargar reservas. Verifica las políticas RLS.')
           // Continuar sin reservas en lugar de mostrar error
         }
-        setBookings([])
         setBookingsWithUsers([])
       } else {
-        setBookings(bookingsData || [])
         
         // Cargar perfiles de usuarios que tienen reservas (incluyendo carpooling)
         if (bookingsData && bookingsData.length > 0) {
@@ -403,37 +401,35 @@ export default function MapPage() {
       }
     } catch (error) {
       console.error('Error loading bookings:', error)
-      setBookings([])
       setBookingsWithUsers([])
     } finally {
       setLoading(false)
     }
   }
 
-  const loadSpotBlocks = async (date: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('spot_blocks')
-        .select('*')
-        .eq('date', date)
-
-      if (error) {
-        // Si la tabla no existe, simplemente no hay bloqueos
-        if (error.message?.includes('does not exist') || error.message?.includes('schema cache')) {
-          console.warn('Tabla spot_blocks no existe. Ejecuta create_spot_blocks.sql en Supabase.')
-          setSpotBlocks([])
-          return
-        }
-        console.error('Error cargando bloqueos:', error)
-        setSpotBlocks([])
-      } else {
-        setSpotBlocks(data || [])
-      }
-    } catch (error) {
-      console.error('Error loading spot blocks:', error)
-      setSpotBlocks([])
-    }
-  }
+  // Función eliminada - no se usa
+  // const loadSpotBlocks = async (date: string) => {
+  //   try {
+  //     const { data, error } = await supabase
+  //       .from('spot_blocks')
+  //       .select('*')
+  //       .eq('date', date)
+  //     if (error) {
+  //       if (error.message?.includes('does not exist') || error.message?.includes('schema cache')) {
+  //         console.warn('Tabla spot_blocks no existe. Ejecuta create_spot_blocks.sql en Supabase.')
+  //         setSpotBlocks([])
+  //         return
+  //       }
+  //       console.error('Error cargando bloqueos:', error)
+  //       setSpotBlocks([])
+  //     } else {
+  //       setSpotBlocks(data || [])
+  //     }
+  //   } catch (error) {
+  //     console.error('Error loading spot blocks:', error)
+  //     setSpotBlocks([])
+  //   }
+  // }
 
   const loadUserBookings = async () => {
     if (!user) return
@@ -565,7 +561,7 @@ export default function MapPage() {
         console.log('❌ Reserva activa encontrada que bloquea la reserva:', spotBookingForDate)
         setError('Esta plaza ya está reservada para esta fecha')
         // Recargar reservas para actualizar la vista
-        await loadBookings(selectedDate)
+        await loadWeekBookings()
         return
       }
     } else {
@@ -657,7 +653,7 @@ export default function MapPage() {
           setShowConfirmModal(false)
           setReserving(false)
           // Recargar reservas para actualizar la vista
-          await loadBookings(selectedDate)
+          await loadWeekBookings()
           return
         }
       } else {
@@ -707,7 +703,7 @@ export default function MapPage() {
           setShowConfirmModal(false)
           setReserving(false)
           // Recargar reservas para actualizar la vista
-          await loadBookings(selectedDate)
+          await loadWeekBookings()
           await loadUserBookings()
           return
         }
@@ -715,7 +711,7 @@ export default function MapPage() {
       }
 
       // Recargar reservas para actualizar la vista
-      await loadBookings(selectedDate)
+      await loadWeekBookings()
       await loadUserBookings() // Recargar también las reservas del usuario
       setShowConfirmModal(false)
       setSelectedSpotId(null)
@@ -757,21 +753,6 @@ export default function MapPage() {
       setError('Ya tienes una reserva para este día')
       return
     }
-
-    // Contar plazas bloqueadas para este día (solo plazas normales, IDs 1-8)
-    const blockedSpotsCount = spotBlocks.filter(
-      block => block.date === dateString && block.spot_id >= 1 && block.spot_id <= 8
-    ).length
-
-    // Verificar si hay plazas disponibles (máximo 8 por día, excluyendo directivos y bloqueos)
-    // Solo contamos las confirmadas, las waitlist no ocupan plaza
-    const bookingsCount = bookings.filter(
-      b => b.date === dateString && 
-           b.status !== 'cancelled' &&
-           b.status === 'confirmed' &&
-           // Excluir reservas de directivos (tienen su propio cupo nominal)
-           b.user?.role !== 'directivo'
-    ).length
 
     // Todas las solicitudes van automáticamente a lista de espera
     // No bloqueamos la solicitud, el admin gestionará la lista de espera
@@ -913,70 +894,62 @@ export default function MapPage() {
     setShowConfirmModal(true)
   }
 
-  // Función para confirmar unirse a la lista de espera
-  const handleConfirmWaitlist = async () => {
-    if (!requestedDate || !user || reserving) return
-
-    setReserving(true)
-    setError(null)
-    try {
-      // Verificación final
-      const { data: finalCheck } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('date', requestedDate)
-        .neq('status', 'cancelled')
-        .maybeSingle()
-
-      if (finalCheck) {
-        setError('Ya tienes una reserva para esta fecha')
-        setShowConfirmModal(false)
-        setReserving(false)
-        await loadWeekBookings()
-        await loadUserBookings()
-        return
-      }
-
-      // Crear entrada en lista de espera
-      const { error: bookingError } = await supabase
-        .from('bookings')
-        .insert({
-          user_id: user.id,
-          spot_id: null,
-          date: requestedDate,
-          status: 'waitlist',
-        })
-        .select()
-        .single()
-
-      if (bookingError) {
-        if (bookingError.code === '23505' || bookingError.message?.includes('duplicate') || bookingError.message?.includes('unique')) {
-          setError('Ya estás en la lista de espera para esta fecha. Recargando...')
-          await loadWeekBookings()
-          await loadUserBookings()
-          setShowConfirmModal(false)
-          setRequestedDate(null)
-          setReserving(false)
-          return
-        }
-        throw bookingError
-      }
-
-      // Recargar reservas
-      await loadWeekBookings()
-      await loadUserBookings()
-      setShowConfirmModal(false)
-      setRequestedDate(null)
-      setError(null)
-    } catch (err: any) {
-      console.error('Error joining waitlist:', err)
-      setError(err.message || 'Error al unirse a la lista de espera')
-      setShowConfirmModal(false)
-    } finally {
-      setReserving(false)
-    }
-  }
+  // Función eliminada - no se usa
+  // const handleConfirmWaitlist = async () => {
+  //   if (!requestedDate || !user || reserving) return
+  //   setReserving(true)
+  //   setError(null)
+  //   try {
+  //     const { data: finalCheck } = await supabase
+  //       .from('bookings')
+  //       .select('*')
+  //       .eq('user_id', user.id)
+  //       .eq('date', requestedDate)
+  //       .neq('status', 'cancelled')
+  //       .maybeSingle()
+  //     if (finalCheck) {
+  //       setError('Ya tienes una reserva para esta fecha')
+  //       setShowConfirmModal(false)
+  //       setReserving(false)
+  //       await loadWeekBookings()
+  //       await loadUserBookings()
+  //       return
+  //     }
+  //     const { error: bookingError } = await supabase
+  //       .from('bookings')
+  //       .insert({
+  //         user_id: user.id,
+  //         spot_id: null,
+  //         date: requestedDate,
+  //         status: 'waitlist',
+  //       })
+  //       .select()
+  //       .single()
+  //     if (bookingError) {
+  //       if (bookingError.code === '23505' || bookingError.message?.includes('duplicate') || bookingError.message?.includes('unique')) {
+  //         setError('Ya estás en la lista de espera para esta fecha. Recargando...')
+  //         await loadWeekBookings()
+  //         await loadUserBookings()
+  //         setShowConfirmModal(false)
+  //         setRequestedDate(null)
+  //         setReserving(false)
+  //         return
+  //       }
+  //       throw bookingError
+  //     }
+  //     await loadWeekBookings()
+  //     await loadUserBookings()
+  //     setShowConfirmModal(false)
+  //     setRequestedDate(null)
+  //     setError(null)
+  //   } catch (err: any) {
+  //     console.error('Error joining waitlist:', err)
+  //     setError(err.message || 'Error al unirse a la lista de espera')
+  //     setShowConfirmModal(false)
+  //   } finally {
+  //     setReserving(false)
+  //   }
+  // }
 
   // Función para cancelar reserva del usuario
   const handleCancelBooking = async (bookingId: number) => {
@@ -1130,52 +1103,43 @@ export default function MapPage() {
     }
   }
 
-  const hasBookingOnDate = (dateString: string): boolean => {
-    return userBookings.some(b => b.date === dateString)
-  }
+  // Funciones eliminadas - no se usan
+  // const hasBookingOnDate = (dateString: string): boolean => {
+  //   return userBookings.some(b => b.date === dateString)
+  // }
 
-  const getBookingStatusOnDate = (dateString: string): 'confirmed' | 'pending' | null => {
-    const booking = userBookings.find(b => b.date === dateString)
-    if (!booking) return null
-    return booking.status === 'confirmed' ? 'confirmed' : 'pending'
-  }
+  // const getBookingStatusOnDate = (dateString: string): 'confirmed' | 'pending' | null => {
+  //   const booking = userBookings.find(b => b.date === dateString)
+  //   if (!booking) return null
+  //   return booking.status === 'confirmed' ? 'confirmed' : 'pending'
+  // }
 
-  // Contar plazas libres para la fecha seleccionada
-  const getFreeSpotsCount = (): number => {
-    const date = selectedDate
-    let freeCount = 0
+  // const getFreeSpotsCount = (): number => {
+  //   const date = selectedDate
+  //   let freeCount = 0
+  //   spots.forEach((spot) => {
+  //     if (spot.is_blocked) return
+  //     const isBlockedForDate = spotBlocks.some(block => block.spot_id === spot.id && block.date === date)
+  //     if (isBlockedForDate) return
+  //     const activeBooking = bookings.find(
+  //       (b) => b.spot_id === spot.id && b.date === date && b.status !== 'cancelled'
+  //     )
+  //     if (!activeBooking) {
+  //       freeCount++
+  //     }
+  //   })
+  //   return freeCount
+  // }
 
-    spots.forEach((spot) => {
-      // Verificar si está bloqueada permanentemente
-      if (spot.is_blocked) return
+  // const handlePreviousDay = () => {
+  //   const previousDay = format(subDays(new Date(selectedDate), 1), 'yyyy-MM-dd')
+  //   setSelectedDate(previousDay)
+  // }
 
-      // Verificar si está bloqueada para esta fecha
-      const isBlockedForDate = spotBlocks.some(block => block.spot_id === spot.id && block.date === date)
-      if (isBlockedForDate) return
-
-      // Verificar si está ocupada (tiene una reserva activa)
-      const activeBooking = bookings.find(
-        (b) => b.spot_id === spot.id && b.date === date && b.status !== 'cancelled'
-      )
-
-      // Si no tiene reserva activa, está libre
-      if (!activeBooking) {
-        freeCount++
-      }
-    })
-
-    return freeCount
-  }
-
-  const handlePreviousDay = () => {
-    const previousDay = format(subDays(new Date(selectedDate), 1), 'yyyy-MM-dd')
-    setSelectedDate(previousDay)
-  }
-
-  const handleNextDay = () => {
-    const nextDay = format(addDays(new Date(selectedDate), 1), 'yyyy-MM-dd')
-    setSelectedDate(nextDay)
-  }
+  // const handleNextDay = () => {
+  //   const nextDay = format(addDays(new Date(selectedDate), 1), 'yyyy-MM-dd')
+  //   setSelectedDate(nextDay)
+  // }
 
   if (loading) {
     return (
@@ -1325,7 +1289,7 @@ export default function MapPage() {
             
             if (error) throw error
             await loadSpots()
-            await loadBookings(selectedDate) // Recargar reservas para actualizar la vista
+            await loadWeekBookings() // Recargar reservas para actualizar la vista
           } catch (err: any) {
             setError(err.message || 'Error al liberar la plaza')
           } finally {
@@ -1360,7 +1324,7 @@ export default function MapPage() {
             
             if (error) throw error
             await loadSpots()
-            await loadBookings(selectedDate)
+            await loadWeekBookings()
           } catch (err: any) {
             setError(err.message || 'Error al ocupar la plaza')
           } finally {
@@ -1379,10 +1343,10 @@ export default function MapPage() {
           setRequestedDate(null)
         }}
         onConfirm={requestedDate 
-          ? (() => {
+          ? () => {
               // Todas las solicitudes van automáticamente a lista de espera
-              return handleConfirmBookingForDay()
-            })()
+              handleConfirmBookingForDay()
+            }
           : handleConfirmReservation
         }
         title={requestedDate ? "Solicitar Plaza" : "Confirmar Solicitud"}
