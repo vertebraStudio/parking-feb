@@ -22,7 +22,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true)
   const [loadingBookings, setLoadingBookings] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'users' | 'spots' | 'bookings' | 'summary'>('users')
+  const [activeTab, setActiveTab] = useState<'users' | 'spots' | 'bookings' | 'summary'>('bookings')
   const [summaryWeekMonday, setSummaryWeekMonday] = useState<Date>(() => {
     const today = new Date()
     return startOfWeek(today, { weekStartsOn: 1 })
@@ -884,21 +884,21 @@ export default function AdminPage() {
       >
         <button
           onClick={() => {
-            setActiveTab('users')
+            setActiveTab('bookings')
             setError(null)
           }}
           className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
-            activeTab === 'users'
+            activeTab === 'bookings'
               ? 'text-white'
               : 'text-gray-700 hover:text-gray-900'
           }`}
-          style={activeTab === 'users' ? {
+          style={activeTab === 'bookings' ? {
             backgroundColor: '#FF9500',
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
           } : {}}
         >
-          <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'users' ? 2.5 : 2} />
-          <span className="whitespace-nowrap">Usuarios</span>
+          <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'bookings' ? 2.5 : 2} />
+          <span className="whitespace-nowrap">Reservas</span>
         </button>
         <button
           onClick={() => {
@@ -915,26 +915,26 @@ export default function AdminPage() {
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
           } : {}}
         >
-          <Car className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'spots' ? 2.5 : 2} />
+          <Lock className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'spots' ? 2.5 : 2} />
           <span className="whitespace-nowrap">Plazas</span>
         </button>
         <button
           onClick={() => {
-            setActiveTab('bookings')
+            setActiveTab('users')
             setError(null)
           }}
           className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
-            activeTab === 'bookings'
+            activeTab === 'users'
               ? 'text-white'
               : 'text-gray-700 hover:text-gray-900'
           }`}
-          style={activeTab === 'bookings' ? {
+          style={activeTab === 'users' ? {
             backgroundColor: '#FF9500',
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
           } : {}}
         >
-          <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'bookings' ? 2.5 : 2} />
-          <span className="whitespace-nowrap">Reservas</span>
+          <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'users' ? 2.5 : 2} />
+          <span className="whitespace-nowrap">Usuarios</span>
         </button>
         <button
           onClick={() => {
