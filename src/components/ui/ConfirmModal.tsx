@@ -53,7 +53,11 @@ export default function ConfirmModal({
             {cancelText}
           </button>
           <button
-            onClick={onConfirm}
+            onClick={() => {
+              if (!loading) {
+                onConfirm()
+              }
+            }}
             disabled={loading}
             className={cn(
               'flex-1 px-4 py-2 text-white rounded-xl font-medium',

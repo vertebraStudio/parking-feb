@@ -10,7 +10,7 @@ export interface Profile {
   updated_at: string
 }
 
-export type BookingStatus = 'confirmed' | 'pending' | 'cancelled'
+export type BookingStatus = 'confirmed' | 'pending' | 'cancelled' | 'waitlist'
 
 export interface ParkingSpot {
   id: number
@@ -26,9 +26,19 @@ export interface ParkingSpot {
 export interface Booking {
   id: number
   user_id: string
-  spot_id: number
+  spot_id: number | null // Ahora puede ser null para el nuevo modelo
   date: string
   status: BookingStatus
+  carpool_with_user_id: string | null // Usuario con el que va en coche (carpooling)
+  created_at: string
+  updated_at: string
+}
+
+export interface WaitlistEntry {
+  id: number
+  user_id: string
+  date: string
+  position: number
   created_at: string
   updated_at: string
 }

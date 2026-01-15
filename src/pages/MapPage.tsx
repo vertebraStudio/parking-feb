@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { format, addDays, subDays, isBefore, startOfDay } from 'date-fns'
+import { format, addDays, subDays, isBefore, startOfDay, startOfWeek, endOfWeek, isSameWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
 import ParkingMap from '../components/ParkingMap'
+import WeekDaysView from '../components/WeekDaysView'
+import DayBookingsList from '../components/DayBookingsList'
 import ConfirmModal from '../components/ui/ConfirmModal'
 import { ParkingSpot, Booking, Profile, SpotBlock } from '../types'
 import { supabase } from '../lib/supabase'
@@ -13,7 +15,7 @@ export default function MapPage() {
   const location = useLocation()
   const [spots, setSpots] = useState<ParkingSpot[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
-  const [bookingsWithUsers, setBookingsWithUsers] = useState<(Booking & { user?: Profile })[]>([])
+  const [bookingsWithUsers, setBookingsWithUsers] = useState<(Booking & { user?: Profile; carpoolUser?: Profile })[]>([])
   const [userBookings, setUserBookings] = useState<Booking[]>([]) // Todas las reservas del usuario
   const [spotBlocks, setSpotBlocks] = useState<SpotBlock[]>([]) // Bloqueos por fecha
   const [executiveProfiles, setExecutiveProfiles] = useState<Map<string, Profile>>(new Map()) // Perfiles de directivos asignados
@@ -31,10 +33,16 @@ export default function MapPage() {
   const [reserving, setReserving] = useState(false)
   const [releasingSpot, setReleasingSpot] = useState<number | null>(null)
   const [occupyingSpot, setOccupyingSpot] = useState<number | null>(null)
+  const [selectedDayForList, setSelectedDayForList] = useState<string | null>(null)
+  const [requestedDate, setRequestedDate] = useState<string | null>(null)
+  const [selectedWeekMonday, setSelectedWeekMonday] = useState<Date>(() => {
+    const today = new Date()
+    return startOfWeek(today, { weekStartsOn: 1 })
+  })
 
   useEffect(() => {
-    loadSpots()
     loadUser()
+    loadWeekBookings()
 
     // Escuchar cambios en la autenticación
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -58,43 +66,21 @@ export default function MapPage() {
         },
         () => {
           // Recargar reservas cuando hay cambios (insert, update, delete)
-          // Usar el ref para obtener el valor actual sin causar re-suscripciones
-          loadBookings(selectedDateRef.current)
-          // loadUserBookings se llamará automáticamente si hay usuario
-        }
-      )
-      .subscribe()
-
-    // Suscripción a cambios en tiempo real en la tabla parking_spots
-    // Esto es necesario para detectar cuando un directivo libera/ocupa su plaza
-    const spotsChannel = supabase
-      .channel('spots-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'parking_spots',
-        },
-        () => {
-          // Recargar plazas cuando hay cambios (especialmente is_released)
-          loadSpots()
+          loadWeekBookings()
+          // loadUserBookings se llamará en otro useEffect cuando user cambie
         }
       )
       .subscribe()
 
     // Recargar cuando la página recupera el foco (por si se canceló una reserva en otra pestaña/página)
     const handleFocus = () => {
-      // Usar el ref para obtener el valor actual
-      loadBookings(selectedDateRef.current)
-      loadSpots() // También recargar plazas
+      loadWeekBookings()
     }
     window.addEventListener('focus', handleFocus)
 
     return () => {
       subscription.unsubscribe()
       supabase.removeChannel(bookingsChannel)
-      supabase.removeChannel(spotsChannel)
       window.removeEventListener('focus', handleFocus)
     }
   }, [])
@@ -120,15 +106,17 @@ export default function MapPage() {
   }, [location.state])
 
   useEffect(() => {
-    loadBookings(selectedDate)
-    loadSpotBlocks(selectedDate)
-  }, [selectedDate])
+    loadWeekBookings()
+    if (user) {
+      loadUserBookings()
+    }
+  }, [user, selectedWeekMonday])
 
   // Recargar reservas cuando el usuario vuelve a esta página
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        loadBookings(selectedDate)
+        loadWeekBookings()
         if (user) {
           loadUserBookings()
         }
@@ -138,7 +126,7 @@ export default function MapPage() {
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [selectedDate, user])
+  }, [user])
 
   const loadUser = async () => {
     try {
@@ -291,13 +279,45 @@ export default function MapPage() {
     }
   }
 
-  const loadBookings = async (date: string) => {
+  // Cargar todas las reservas de la semana seleccionada (lunes a viernes)
+  const loadWeekBookings = async () => {
     try {
+      setLoading(true)
+      const monday = new Date(selectedWeekMonday)
+      const friday = addDays(monday, 4)
+      
+      const mondayString = format(monday, 'yyyy-MM-dd')
+      const fridayString = format(friday, 'yyyy-MM-dd')
+
+      // Cargar bloqueos de plazas para toda la semana
+      const { data: blocksData, error: blocksError } = await supabase
+        .from('spot_blocks')
+        .select('*')
+        .gte('date', mondayString)
+        .lte('date', fridayString)
+
+      if (blocksError) {
+        // Si la tabla no existe, simplemente no hay bloqueos
+        if (blocksError.message?.includes('does not exist') || blocksError.message?.includes('schema cache')) {
+          console.warn('Tabla spot_blocks no existe. Ejecuta create_spot_blocks.sql en Supabase.')
+          setSpotBlocks([])
+        } else {
+          console.error('Error cargando bloqueos:', blocksError)
+          setSpotBlocks([])
+        }
+      } else {
+        // Filtrar solo bloqueos de plazas normales (no directivos, IDs 1-8)
+        const normalBlocks = (blocksData || []).filter(block => block.spot_id >= 1 && block.spot_id <= 8)
+        setSpotBlocks(normalBlocks)
+      }
+
       const { data: bookingsData, error: bookingsError } = await supabase
         .from('bookings')
         .select('*')
-        .eq('date', date)
+        .gte('date', mondayString)
+        .lte('date', fridayString)
         .neq('status', 'cancelled')
+        // Incluir waitlist también
 
       if (bookingsError) {
         console.error('Error cargando reservas:', bookingsError)
@@ -318,13 +338,19 @@ export default function MapPage() {
       } else {
         setBookings(bookingsData || [])
         
-        // Cargar perfiles de usuarios que tienen reservas
+        // Cargar perfiles de usuarios que tienen reservas (incluyendo carpooling)
         if (bookingsData && bookingsData.length > 0) {
           const userIds = [...new Set(bookingsData.map(b => b.user_id))]
+          // También incluir usuarios con los que van en coche
+          const carpoolUserIds = bookingsData
+            .map(b => b.carpool_with_user_id)
+            .filter((id): id is string => id !== null)
+          const allUserIds = [...new Set([...userIds, ...carpoolUserIds])]
+          
           const { data: profilesData, error: profilesError } = await supabase
             .from('profiles')
             .select('*')
-            .in('id', userIds)
+            .in('id', allUserIds)
 
           if (profilesError) {
             console.error('Error cargando perfiles:', profilesError)
@@ -345,12 +371,16 @@ export default function MapPage() {
             console.log('Perfiles cargados:', profilesData?.length || 0, 'de', userIds.length, 'usuarios')
             const bookingsWithUserInfo = bookingsData.map(booking => {
               const userProfile = profilesData?.find(p => p.id === booking.user_id)
+              const carpoolProfile = booking.carpool_with_user_id 
+                ? profilesData?.find(p => p.id === booking.carpool_with_user_id)
+                : null
               if (!userProfile) {
                 console.warn(`No se encontró perfil para el usuario ${booking.user_id} en la reserva ${booking.id}`)
               }
               return {
                 ...booking,
-                user: userProfile
+                user: userProfile,
+                carpoolUser: carpoolProfile
               }
             })
             
@@ -375,6 +405,8 @@ export default function MapPage() {
       console.error('Error loading bookings:', error)
       setBookings([])
       setBookingsWithUsers([])
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -703,6 +735,385 @@ export default function MapPage() {
     return spots.find(s => s.id === spotId)?.label || `Plaza ${spotId}`
   }
 
+  // Nueva función para solicitar plaza para un día (sin spot_id específico)
+  const handleRequestBooking = (date: string) => {
+    if (!user) {
+      setError('Debes iniciar sesión para solicitar una plaza')
+      return
+    }
+
+    if (!user.is_verified) {
+      setError('Tu cuenta debe estar verificada para solicitar plazas')
+      return
+    }
+
+    // Verificar si ya tiene reserva para este día
+    const dateString = format(new Date(date), 'yyyy-MM-dd')
+    const hasBooking = userBookings.some(
+      b => b.date === dateString && b.status !== 'cancelled'
+    )
+
+    if (hasBooking) {
+      setError('Ya tienes una reserva para este día')
+      return
+    }
+
+    // Contar plazas bloqueadas para este día (solo plazas normales, IDs 1-8)
+    const blockedSpotsCount = spotBlocks.filter(
+      block => block.date === dateString && block.spot_id >= 1 && block.spot_id <= 8
+    ).length
+
+    // Verificar si hay plazas disponibles (máximo 8 por día, excluyendo directivos y bloqueos)
+    // Solo contamos las confirmadas, las waitlist no ocupan plaza
+    const bookingsCount = bookings.filter(
+      b => b.date === dateString && 
+           b.status !== 'cancelled' &&
+           b.status === 'confirmed' &&
+           // Excluir reservas de directivos (tienen su propio cupo nominal)
+           b.user?.role !== 'directivo'
+    ).length
+
+    // Todas las solicitudes van automáticamente a lista de espera
+    // No bloqueamos la solicitud, el admin gestionará la lista de espera
+    setRequestedDate(dateString)
+    setShowConfirmModal(true)
+  }
+
+  // Nueva función para confirmar reserva sin spot_id
+  const handleConfirmBookingForDay = async () => {
+    if (!requestedDate || !user || reserving) return // Prevenir doble clic
+
+    setReserving(true)
+    setError(null)
+    try {
+      // Verificación final justo antes de insertar (doble verificación)
+      const { data: finalCheck } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('date', requestedDate)
+        .neq('status', 'cancelled')
+        .maybeSingle()
+
+      if (finalCheck) {
+        setError('Ya tienes una reserva para esta fecha')
+        setShowConfirmModal(false)
+        setReserving(false)
+        await loadWeekBookings()
+        await loadUserBookings()
+        return
+      }
+
+      // Todas las solicitudes van automáticamente a lista de espera
+      // El admin gestionará la lista y decidirá si hay espacio disponible
+      // Crear reserva sin spot_id (null) - automáticamente en lista de espera
+      const { error: bookingError } = await supabase
+        .from('bookings')
+        .insert({
+          user_id: user.id,
+          spot_id: null, // No se asigna plaza específica
+          date: requestedDate,
+          status: 'waitlist', // Todas las solicitudes van automáticamente a lista de espera
+          carpool_with_user_id: null, // Se puede configurar después desde "Mis Reservas"
+        })
+        .select()
+        .single()
+
+      if (bookingError) {
+        // Manejar error de duplicado (índice único)
+        if (bookingError.code === '23505' || bookingError.message?.includes('duplicate') || bookingError.message?.includes('unique')) {
+          setError('Ya existe una reserva para esta fecha. Recargando...')
+          await loadWeekBookings()
+          await loadUserBookings()
+          setShowConfirmModal(false)
+          setRequestedDate(null)
+          setReserving(false)
+          return
+        }
+        throw bookingError
+      }
+
+      // Recargar reservas
+      await loadWeekBookings()
+      await loadUserBookings()
+      setShowConfirmModal(false)
+      setRequestedDate(null)
+      setError(null)
+    } catch (err: any) {
+      console.error('Error creating booking:', err)
+      setError(err.message || 'Error al crear la reserva')
+      setShowConfirmModal(false)
+    } finally {
+      setReserving(false)
+    }
+  }
+
+  // Función para unirse a la lista de espera
+  const handleJoinWaitlist = async (date: string) => {
+    if (!user) {
+      setError('Debes iniciar sesión para unirte a la lista de espera')
+      return
+    }
+
+    if (!user.is_verified) {
+      setError('Tu cuenta debe estar verificada para unirte a la lista de espera')
+      return
+    }
+
+    const dateString = format(new Date(date), 'yyyy-MM-dd')
+
+    // Verificar si ya tiene reserva o está en lista de espera para este día
+    const hasBooking = userBookings.some(
+      b => b.date === dateString && b.status !== 'cancelled'
+    )
+
+    if (hasBooking) {
+      setError('Ya tienes una reserva o estás en la lista de espera para este día')
+      return
+    }
+
+    // Verificar que realmente esté lleno (8 plazas ocupadas, excluyendo directivos)
+    // Solo contamos las confirmadas, las waitlist no ocupan plaza
+    const { data: dayBookings } = await supabase
+      .from('bookings')
+      .select('*')
+      .eq('date', dateString)
+      .neq('status', 'cancelled')
+      .eq('status', 'confirmed')
+
+    if (dayBookings && dayBookings.length > 0) {
+      // Cargar perfiles para filtrar directivos
+      const userIds = [...new Set(dayBookings.map(b => b.user_id))]
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('id, role')
+        .in('id', userIds)
+
+      // Crear un mapa de roles
+      const roleMap = new Map<string, string>()
+      profilesData?.forEach(p => roleMap.set(p.id, p.role))
+
+      // Filtrar reservas de directivos del conteo
+      const normalBookingsCount = dayBookings.filter(b => {
+        const userRole = roleMap.get(b.user_id)
+        return userRole !== 'directivo'
+      }).length
+
+      if (normalBookingsCount < 8) {
+        setError('Aún hay plazas disponibles. Por favor, solicita una plaza en lugar de unirte a la lista de espera.')
+        return
+      }
+    } else {
+      // Si no hay reservas, no está lleno
+      setError('Aún hay plazas disponibles. Por favor, solicita una plaza en lugar de unirte a la lista de espera.')
+      return
+    }
+
+    setRequestedDate(dateString)
+    setShowConfirmModal(true)
+  }
+
+  // Función para confirmar unirse a la lista de espera
+  const handleConfirmWaitlist = async () => {
+    if (!requestedDate || !user || reserving) return
+
+    setReserving(true)
+    setError(null)
+    try {
+      // Verificación final
+      const { data: finalCheck } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('date', requestedDate)
+        .neq('status', 'cancelled')
+        .maybeSingle()
+
+      if (finalCheck) {
+        setError('Ya tienes una reserva para esta fecha')
+        setShowConfirmModal(false)
+        setReserving(false)
+        await loadWeekBookings()
+        await loadUserBookings()
+        return
+      }
+
+      // Crear entrada en lista de espera
+      const { error: bookingError } = await supabase
+        .from('bookings')
+        .insert({
+          user_id: user.id,
+          spot_id: null,
+          date: requestedDate,
+          status: 'waitlist',
+        })
+        .select()
+        .single()
+
+      if (bookingError) {
+        if (bookingError.code === '23505' || bookingError.message?.includes('duplicate') || bookingError.message?.includes('unique')) {
+          setError('Ya estás en la lista de espera para esta fecha. Recargando...')
+          await loadWeekBookings()
+          await loadUserBookings()
+          setShowConfirmModal(false)
+          setRequestedDate(null)
+          setReserving(false)
+          return
+        }
+        throw bookingError
+      }
+
+      // Recargar reservas
+      await loadWeekBookings()
+      await loadUserBookings()
+      setShowConfirmModal(false)
+      setRequestedDate(null)
+      setError(null)
+    } catch (err: any) {
+      console.error('Error joining waitlist:', err)
+      setError(err.message || 'Error al unirse a la lista de espera')
+      setShowConfirmModal(false)
+    } finally {
+      setReserving(false)
+    }
+  }
+
+  // Función para cancelar reserva del usuario
+  const handleCancelBooking = async (bookingId: number) => {
+    if (!user) return
+
+    try {
+      const { error } = await supabase
+        .from('bookings')
+        .update({ status: 'cancelled' })
+        .eq('id', bookingId)
+        .eq('user_id', user.id)
+
+      if (error) throw error
+
+      // Después de cancelar, verificar si hay alguien en lista de espera para promover
+      await promoteFromWaitlist(bookingId)
+
+      await loadWeekBookings()
+      await loadUserBookings()
+      setSelectedDayForList(null)
+    } catch (err: any) {
+      console.error('Error canceling booking:', err)
+      setError(err.message || 'Error al cancelar la reserva')
+    }
+  }
+
+  // Función para promover el primero de la lista de espera cuando se cancela una reserva
+  const promoteFromWaitlist = async (cancelledBookingId: number) => {
+    try {
+      // Obtener la reserva cancelada para saber la fecha y el estado anterior
+      const { data: cancelledBooking } = await supabase
+        .from('bookings')
+        .select('date, status')
+        .eq('id', cancelledBookingId)
+        .single()
+
+      if (!cancelledBooking) return
+
+      // Solo promover si la reserva cancelada era una reserva activa (confirmed o pending)
+      // No promover si era waitlist (ya que no libera una plaza)
+      if (cancelledBooking.status === 'waitlist') {
+        return
+      }
+
+      // Contar plazas bloqueadas para este día (solo plazas normales, IDs 1-8)
+      const blockedSpotsForDate = spotBlocks.filter(
+        block => block.date === cancelledBooking.date && block.spot_id >= 1 && block.spot_id <= 8
+      )
+      const blockedSpotsCount = blockedSpotsForDate.length
+      const availableSpots = 8 - blockedSpotsCount
+
+      // Verificar que realmente haya espacio disponible (menos de 8 plazas ocupadas, excluyendo directivos y bloqueos)
+      const { data: activeBookings } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('date', cancelledBooking.date)
+        .neq('status', 'cancelled')
+        .eq('status', 'confirmed') // Solo contamos las confirmadas para determinar si hay espacio
+
+      if (activeBookings && activeBookings.length > 0) {
+        // Cargar perfiles para filtrar directivos
+        const userIds = [...new Set(activeBookings.map(b => b.user_id))]
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('id, role')
+          .in('id', userIds)
+
+        // Crear un mapa de roles
+        const roleMap = new Map<string, string>()
+        profilesData?.forEach(p => roleMap.set(p.id, p.role))
+
+        // Filtrar reservas de directivos del conteo
+        const normalBookingsCount = activeBookings.filter(b => {
+          const userRole = roleMap.get(b.user_id)
+          return userRole !== 'directivo'
+        }).length
+
+        // Si ya hay plazas ocupadas >= disponibles (considerando bloqueos), no promover
+        if (normalBookingsCount >= availableSpots) {
+          console.warn(`No se puede promover de waitlist: ya hay ${normalBookingsCount} plazas ocupadas de ${availableSpots} disponibles (excluyendo directivos y bloqueos)`)
+          return
+        }
+      } else {
+        // Si no hay reservas activas, verificar que no esté todo bloqueado
+        if (availableSpots <= 0) {
+          console.warn('No se puede promover de waitlist: todas las plazas están bloqueadas')
+          return
+        }
+      }
+
+      // Buscar el primero en la lista de espera para esa fecha (ordenado por created_at, excluyendo directivos)
+      const { data: waitlistEntries } = await supabase
+        .from('bookings')
+        .select('*')
+        .eq('date', cancelledBooking.date)
+        .eq('status', 'waitlist')
+        .order('created_at', { ascending: true })
+
+      if (waitlistEntries && waitlistEntries.length > 0) {
+        // Cargar perfiles para filtrar directivos
+        const waitlistUserIds = [...new Set(waitlistEntries.map(b => b.user_id))]
+        const { data: waitlistProfilesData } = await supabase
+          .from('profiles')
+          .select('id, role')
+          .in('id', waitlistUserIds)
+
+        // Crear un mapa de roles
+        const waitlistRoleMap = new Map<string, string>()
+        waitlistProfilesData?.forEach(p => waitlistRoleMap.set(p.id, p.role))
+
+        // Filtrar directivos y obtener el primero
+        const normalWaitlistEntries = waitlistEntries.filter(b => {
+          const userRole = waitlistRoleMap.get(b.user_id)
+          return userRole !== 'directivo'
+        })
+
+        if (normalWaitlistEntries.length > 0) {
+          const firstWaitlist = normalWaitlistEntries[0]
+          
+          // Promover a pending
+          const { error: promoteError } = await supabase
+            .from('bookings')
+            .update({ status: 'pending' })
+            .eq('id', firstWaitlist.id)
+
+          if (promoteError) {
+            console.error('Error promoting from waitlist:', promoteError)
+          } else {
+            console.log('Promovido de waitlist a pending:', firstWaitlist.id)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error in promoteFromWaitlist:', err)
+    }
+  }
+
   const formatDateDisplay = (dateString: string) => {
     const date = new Date(dateString)
     const today = startOfDay(new Date())
@@ -772,29 +1183,7 @@ export default function MapPage() {
         className="p-4 min-h-screen flex items-center justify-center bg-white"
       >
         <div className="text-center py-8">
-          <p className="text-gray-600">Cargando plazas...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (spots.length === 0) {
-    return (
-      <div 
-        className="p-4 min-h-screen flex items-center justify-center bg-white"
-      >
-        <div className="text-center py-8">
-          <p className="text-gray-600 mb-4">No hay plazas disponibles</p>
-          <button
-            onClick={loadSpots}
-            className="px-6 py-3 text-white font-semibold rounded-[14px] transition-all duration-200 active:scale-95"
-            style={{ 
-              backgroundColor: '#FF9500',
-              boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
-            }}
-          >
-            Reintentar
-          </button>
+          <p className="text-gray-600">Cargando...</p>
         </div>
       </div>
     )
@@ -807,8 +1196,8 @@ export default function MapPage() {
         minHeight: '100vh'
       }}
     >
-      {/* Título con estilo iOS y contador de plazas libres */}
-      <div className="flex items-center justify-between mb-6">
+      {/* Título */}
+      <div className="mb-4">
         <h1 
           className="text-3xl font-semibold text-gray-900 tracking-tight"
           style={{ 
@@ -816,131 +1205,76 @@ export default function MapPage() {
             letterSpacing: '-0.5px'
           }}
         >
-          Mapa de Plazas
+          Parking
         </h1>
-        <div 
-          className="px-4 py-2 rounded-[14px] flex items-center gap-2"
-          style={{
-            backgroundColor: 'rgba(52, 199, 89, 0.1)',
-            border: '1px solid rgba(52, 199, 89, 0.2)',
-          }}
-        >
-          <span 
-            className="text-sm font-semibold"
-            style={{ color: '#34C759' }}
+      </div>
+
+      {/* Selector de semana */}
+      <div 
+        className="mb-4 p-4 bg-gray-50 rounded-[20px] border border-gray-200"
+      >
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => {
+              const previousWeek = subDays(selectedWeekMonday, 7)
+              setSelectedWeekMonday(previousWeek)
+            }}
+            className="flex-shrink-0 p-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+            title="Semana anterior"
           >
-            {getFreeSpotsCount()} libre{getFreeSpotsCount() !== 1 ? 's' : ''}
-          </span>
+            <ChevronLeft className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
+          </button>
+          
+          <div className="flex-1 text-center px-2">
+            <button
+              onClick={() => {
+                const today = new Date()
+                setSelectedWeekMonday(startOfWeek(today, { weekStartsOn: 1 }))
+              }}
+              className="w-full px-4 py-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+            >
+              <span className="text-sm font-semibold text-gray-900">
+                {format(selectedWeekMonday, 'd MMM', { locale: es })} - {format(addDays(selectedWeekMonday, 4), 'd MMM', { locale: es })}
+              </span>
+            </button>
+          </div>
+          
+          <button
+            onClick={() => {
+              const nextWeek = addDays(selectedWeekMonday, 7)
+              setSelectedWeekMonday(nextWeek)
+            }}
+            className="flex-shrink-0 p-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+            title="Semana siguiente"
+          >
+            <ChevronRight className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
+          </button>
         </div>
       </div>
       
-      {/* Selector de fecha estilo iOS Segmented Control */}
-      <div className="mb-6">
-        {/* Contenedor para el selector */}
-        <div 
-          className="bg-gray-50 rounded-[20px] p-4 sm:p-5 border border-gray-200"
-        >
-          <div className="flex items-center gap-3 mb-4">
-            {/* Botón día anterior */}
-            <button
-              onClick={handlePreviousDay}
-              className="flex-shrink-0 p-3 rounded-[14px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50"
-              title="Día anterior"
-            >
-              <ChevronLeft className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
-            </button>
+      {/* Vista de días de la semana */}
+      <WeekDaysView
+        bookings={bookingsWithUsers}
+        userBookings={userBookings}
+        userId={user?.id}
+        weekMonday={selectedWeekMonday}
+        onDayClick={(date) => setSelectedDayForList(date)}
+        onRequestBooking={handleRequestBooking}
+        onJoinWaitlist={handleJoinWaitlist}
+        spotBlocks={spotBlocks}
+      />
 
-            {/* Input de fecha minimalista estilo iOS */}
-            <div className="relative flex-1 min-w-0">
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-full px-4 py-3.5 rounded-[14px] focus:outline-none transition-all duration-200 text-gray-900 font-medium bg-white border text-base"
-                style={{
-                  borderColor: hasBookingOnDate(selectedDate) 
-                    ? (getBookingStatusOnDate(selectedDate) === 'pending' ? '#FFB800' : '#FF9500')
-                    : '#E5E7EB',
-                }}
-                onFocus={(e) => {
-                  const bookingStatus = getBookingStatusOnDate(selectedDate)
-                  const borderColor = bookingStatus === 'pending' ? '#FFB800' : '#FF9500'
-                  e.target.style.borderColor = borderColor
-                  e.target.style.boxShadow = `0 0 0 3px ${bookingStatus === 'pending' ? 'rgba(255, 184, 0, 0.1)' : 'rgba(255, 149, 0, 0.1)'}`
-                }}
-                onBlur={(e) => {
-                  if (hasBookingOnDate(selectedDate)) {
-                    const bookingStatus = getBookingStatusOnDate(selectedDate)
-                    e.target.style.borderColor = bookingStatus === 'pending' ? '#FFB800' : '#FF9500'
-                    e.target.style.boxShadow = 'none'
-                  } else {
-                    e.target.style.borderColor = '#E5E7EB'
-                    e.target.style.boxShadow = 'none'
-                  }
-                }}
-              />
-              {hasBookingOnDate(selectedDate) && (() => {
-                const bookingStatus = getBookingStatusOnDate(selectedDate)
-                const isPending = bookingStatus === 'pending'
-                return (
-                  <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-                    <div 
-                      className="w-2.5 h-2.5 rounded-full"
-                      style={{ 
-                        backgroundColor: isPending ? '#FFB800' : '#FF9500',
-                        boxShadow: isPending 
-                          ? '0 0 8px rgba(255, 184, 0, 0.8)' 
-                          : '0 0 8px rgba(255, 149, 0, 0.8)'
-                      }}
-                    ></div>
-                  </div>
-                )
-              })()}
-            </div>
+      {/* Lista de reservas del día seleccionado */}
+      {selectedDayForList && (
+        <DayBookingsList
+          date={selectedDayForList}
+          bookings={bookingsWithUsers}
+          onClose={() => setSelectedDayForList(null)}
+          onCancelBooking={handleCancelBooking}
+          currentUserId={user?.id}
+        />
+      )}
 
-            {/* Botón día siguiente */}
-            <button
-              onClick={handleNextDay}
-              className="flex-shrink-0 p-3 rounded-[14px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50"
-              title="Día siguiente"
-            >
-              <ChevronRight className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
-            </button>
-          </div>
-
-          {/* Información de fecha y badge de reserva */}
-          <div className="flex items-center justify-between gap-3 mt-1">
-            <p 
-              className="text-sm font-medium text-gray-600 flex-1 min-w-0"
-              style={{ 
-                fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-                letterSpacing: '0.2px'
-              }}
-            >
-              {formatDateDisplay(selectedDate)}
-            </p>
-            {hasBookingOnDate(selectedDate) && (() => {
-              const bookingStatus = getBookingStatusOnDate(selectedDate)
-              const isPending = bookingStatus === 'pending'
-              return (
-                <span 
-                  className="text-xs text-white font-semibold flex items-center gap-1.5 px-3 py-1.5 rounded-[10px]"
-                  style={{ 
-                    backgroundColor: isPending ? '#FFB800' : '#FF9500',
-                    boxShadow: isPending 
-                      ? '0 2px 8px rgba(255, 184, 0, 0.3)' 
-                      : '0 2px 8px rgba(255, 149, 0, 0.3)'
-                  }}
-                >
-                  <div className="w-2 h-2 rounded-full bg-white"></div>
-                  {isPending ? 'Pendiente' : 'Tienes reserva'}
-                </span>
-              )
-            })()}
-          </div>
-        </div>
-
-      </div>
 
       {connectionError && (
         <div 
@@ -969,7 +1303,8 @@ export default function MapPage() {
         </div>
       )}
 
-      <ParkingMap
+      {/* ParkingMap oculto - ya no se usa en el nuevo paradigma */}
+      {false && <ParkingMap
         spots={spots}
         bookings={bookingsWithUsers}
         spotBlocks={spotBlocks}
@@ -1034,18 +1369,29 @@ export default function MapPage() {
         }}
         releasingSpot={releasingSpot}
         occupyingSpot={occupyingSpot}
-      />
+      />}
 
       <ConfirmModal
         isOpen={showConfirmModal}
         onClose={() => {
           setShowConfirmModal(false)
           setSelectedSpotId(null)
+          setRequestedDate(null)
         }}
-        onConfirm={handleConfirmReservation}
-        title="Confirmar Reserva"
-        message={`¿Deseas reservar ${getSpotLabel(selectedSpotId || 0)} para el ${formatDateDisplay(selectedDate)}?`}
-        confirmText="Reservar"
+        onConfirm={requestedDate 
+          ? (() => {
+              // Todas las solicitudes van automáticamente a lista de espera
+              return handleConfirmBookingForDay()
+            })()
+          : handleConfirmReservation
+        }
+        title={requestedDate ? "Solicitar Plaza" : "Confirmar Solicitud"}
+        message={requestedDate 
+          ? `¿Deseas solicitar una plaza para el ${formatDateDisplay(requestedDate)}? Tu solicitud se añadirá a la lista de espera y el administrador la revisará. Puedes añadir un compañero de coche desde "Mis Reservas" después.`
+          : `¿Deseas reservar ${getSpotLabel(selectedSpotId || 0)} para el ${formatDateDisplay(selectedDate)}?`
+        }
+        confirmText={requestedDate ? "Solicitar" : "Confirmar"}
+        cancelText="Cancelar"
         loading={reserving}
       />
     </div>
