@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3 } from 'lucide-react'
+import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3, Eye, EyeOff } from 'lucide-react'
 import { format, startOfWeek, addDays, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '../lib/supabase'
@@ -38,6 +38,7 @@ export default function AdminPage() {
   const [loadingSpotBlocks, setLoadingSpotBlocks] = useState(false)
   const [selectedDayForList, setSelectedDayForList] = useState<number | null>(null) // Día seleccionado para ver lista (0-4: L-V, null: todas)
   const [spotsToBlock, setSpotsToBlock] = useState<number>(0) // Número de plazas a bloquear
+  const [showConfirmedBookings, setShowConfirmedBookings] = useState<boolean>(true) // Mostrar reservas confirmadas
   
   // Estados para modales
   const [showBlockModal, setShowBlockModal] = useState(false)
@@ -1271,6 +1272,36 @@ export default function AdminPage() {
           </div>
 
 
+          {/* Switch para mostrar/ocultar reservas confirmadas */}
+          <div 
+            className="rounded-[20px] p-4 border border-gray-200 bg-white"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {showConfirmedBookings ? (
+                  <Eye className="w-4 h-4 text-gray-600" strokeWidth={2} />
+                ) : (
+                  <EyeOff className="w-4 h-4 text-gray-400" strokeWidth={2} />
+                )}
+                <span className="text-sm font-semibold text-gray-900">
+                  Mostrar reservas confirmadas
+                </span>
+              </div>
+              <button
+                onClick={() => setShowConfirmedBookings(!showConfirmedBookings)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 ${
+                  showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    showConfirmedBookings ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
           {/* Botones de días de la semana */}
           <div 
             className="rounded-[20px] p-4 border border-gray-200 bg-gray-50"
@@ -1278,10 +1309,10 @@ export default function AdminPage() {
             <p className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wider">
               Ver reservas por día
             </p>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex gap-1.5 overflow-x-auto">
               <button
                 onClick={() => setSelectedDayForList(null)}
-                className={`px-4 py-2 rounded-[12px] border transition-all duration-200 active:scale-95 font-semibold ${
+                className={`flex-shrink-0 px-3 py-1.5 rounded-[10px] border transition-all duration-200 active:scale-95 text-xs font-semibold whitespace-nowrap ${
                   selectedDayForList === null
                     ? 'bg-gray-800 border-gray-800 text-white'
                     : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
@@ -1296,7 +1327,7 @@ export default function AdminPage() {
                   <button
                     key={index}
                     onClick={() => setSelectedDayForList(isSelected ? null : index)}
-                    className={`px-4 py-2 rounded-[12px] border transition-all duration-200 active:scale-95 font-semibold ${
+                    className={`flex-shrink-0 px-3 py-1.5 rounded-[10px] border transition-all duration-200 active:scale-95 text-xs font-semibold whitespace-nowrap ${
                       isSelected
                         ? 'bg-gray-800 border-gray-800 text-white'
                         : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
@@ -1318,7 +1349,13 @@ export default function AdminPage() {
                 const dayDateString = format(dayDate, 'yyyy-MM-dd')
                 const dayName = format(dayDate, 'EEEE, d \'de\' MMMM', { locale: es })
                 const dayBookings = bookings
-                  .filter(b => b.date === dayDateString && b.status !== 'cancelled')
+                  .filter(b => {
+                    if (b.date !== dayDateString) return false
+                    if (b.status === 'cancelled') return false
+                    // Filtrar reservas confirmadas si el switch está desactivado
+                    if (!showConfirmedBookings && b.status === 'confirmed') return false
+                    return true
+                  })
                   .sort((a, b) => {
                     // Ordenar: pending primero, luego waitlist, luego confirmed
                     const order = { pending: 0, waitlist: 1, confirmed: 2 }
@@ -1451,7 +1488,12 @@ export default function AdminPage() {
               ) : (
                 <div className="space-y-3">
                   {bookings
-                    .filter(b => b.status !== 'cancelled')
+                    .filter(b => {
+                      if (b.status === 'cancelled') return false
+                      // Filtrar reservas confirmadas si el switch está desactivado
+                      if (!showConfirmedBookings && b.status === 'confirmed') return false
+                      return true
+                    })
                     .sort((a, b) => {
                       // Ordenar por fecha, luego por estado
                       const dateCompare = a.date.localeCompare(b.date)
