@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import Layout from './components/Layout'
+import ScrollToTop from './components/ScrollToTop'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import MapPage from './pages/MapPage'
@@ -74,6 +75,7 @@ function App() {
 
   return (
     <BrowserRouter basename="/parking-feb">
+      <ScrollToTop />
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
