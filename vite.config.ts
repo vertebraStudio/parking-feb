@@ -14,15 +14,16 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'Parking App',
-        short_name: 'Parking',
+        name: 'FEB parking',
+        short_name: 'FEB parking',
         description: 'Aplicación de gestión de parking',
-        theme_color: '#3b82f6',
-        background_color: '#ffffff',
+        theme_color: '#FF9500',
+        background_color: '#111C4E',
         display: 'standalone',
         orientation: 'portrait',
         scope: '/parking-feb/',
         start_url: '/parking-feb/',
+        splash_pages: null,
         icons: [
           {
             src: 'pwa-192x192.png',

@@ -101,7 +101,7 @@ export default function AdminPage() {
       loadBookings()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedWeekMonday, activeTab])
+  }, [selectedWeekMonday, activeTab, user])
 
   // Resetear día seleccionado al cambiar de semana
   useEffect(() => {

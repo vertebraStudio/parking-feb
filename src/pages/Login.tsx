@@ -52,7 +52,7 @@ export default function Login() {
     <div 
       className="min-h-screen flex flex-col"
       style={{
-        background: 'linear-gradient(to bottom, #111C4E, #FF9500)',
+        background: 'linear-gradient(to bottom, #111C4E 0%, #111C4E 60%, #FF9500 100%)',
       }}
     >
       <div className="flex justify-center pt-8 pb-4">
