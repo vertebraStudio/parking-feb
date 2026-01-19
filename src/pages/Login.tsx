@@ -46,13 +46,25 @@ export default function Login() {
     }
   }
 
+  const iconUrl = `${import.meta.env.BASE_URL}images/login-icon.png`
+
   return (
     <div 
-      className="min-h-screen flex items-center justify-center p-4 bg-white"
+      className="min-h-screen flex flex-col"
+      style={{
+        background: 'linear-gradient(to bottom, #111C4E, #FF9500)',
+      }}
     >
-      <div className="w-full max-w-md">
+      <div className="flex justify-center pt-8 pb-4">
+        <img 
+          src={iconUrl} 
+          alt="Login icon" 
+          className="h-64 w-64 object-contain"
+        />
+      </div>
+      <div className="flex-1 flex justify-center">
         <div 
-          className="rounded-[20px] shadow-lg p-8 border border-gray-200 bg-white"
+          className="w-full max-w-md rounded-t-[20px] shadow-lg p-8 border-t border-l border-r border-gray-200 bg-white"
         >
           <h1 
             className="text-3xl font-semibold text-gray-900 mb-2 text-center tracking-tight"
@@ -61,7 +73,7 @@ export default function Login() {
               letterSpacing: '-0.5px'
             }}
           >
-            Parking App
+            FEB parking
           </h1>
           <p className="text-gray-600 text-center mb-8">
             Inicia sesión para continuar
