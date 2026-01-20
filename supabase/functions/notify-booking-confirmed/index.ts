@@ -13,16 +13,27 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 type Json = Record<string, unknown>
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
+
 function jsonResponse(status: number, body: Json) {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       'Content-Type': 'application/json',
+      ...corsHeaders,
     },
   })
 }
 
 Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
   if (req.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' })
 
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || ''
@@ -33,25 +44,6 @@ Deno.serve(async (req) => {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
     return jsonResponse(500, { error: 'Missing Supabase env vars' })
   }
-
-  // Use caller auth to verify admin
-  const authHeader = req.headers.get('Authorization') || ''
-  const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: authHeader } },
-  })
-
-  const { data: userData, error: userErr } = await userClient.auth.getUser()
-  if (userErr || !userData.user) return jsonResponse(401, { error: 'Unauthorized' })
-
-  const callerId = userData.user.id
-  const { data: callerProfile, error: callerProfileErr } = await userClient
-    .from('profiles')
-    .select('role')
-    .eq('id', callerId)
-    .single()
-
-  if (callerProfileErr) return jsonResponse(403, { error: 'Forbidden' })
-  if (callerProfile?.role !== 'admin') return jsonResponse(403, { error: 'Admins only' })
 
   let payload: { bookingId?: number } = {}
   try {
@@ -78,7 +70,7 @@ Deno.serve(async (req) => {
     return jsonResponse(409, { error: 'Booking is not confirmed' })
   }
 
-  const title = 'Reserva confirmada'
+  const title = '✅ Reserva confirmada'
   const body = `Tu reserva para el día ${booking.date} ha sido confirmada.`
 
   // 1) Insert in-app notification
@@ -115,8 +107,21 @@ Deno.serve(async (req) => {
     },
     body: JSON.stringify({
       registration_ids: tokenList,
-      notification: { title, body },
-      data: { bookingId: String(booking.id), date: String(booking.date), type: 'booking_confirmed' },
+      notification: { 
+        title, 
+        body,
+        icon: '/parking-feb/pwa-192x192.png',
+        badge: '/parking-feb/pwa-192x192.png',
+      },
+      data: { 
+        bookingId: String(booking.id), 
+        date: String(booking.date), 
+        type: 'booking_confirmed',
+        title,
+        body,
+      },
+      priority: 'high',
+      time_to_live: 3600, // 1 hour
     }),
   })
 

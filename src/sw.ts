@@ -45,16 +45,31 @@ if (isFirebaseConfigured) {
   const messaging = getMessaging(app)
 
   onBackgroundMessage(messaging, (payload) => {
-    const title = payload.notification?.title || 'FEB parking'
-    const body = payload.notification?.body || 'Tu reserva ha sido confirmada.'
+    console.log('[SW] Background message received:', payload)
+    
+    const title = payload.notification?.title || payload.data?.title || 'FEB parking'
+    const body = payload.notification?.body || payload.data?.body || 'Tu reserva ha sido confirmada.'
 
     const data = payload.data || {}
 
-    self.registration.showNotification(title, {
+    const notificationOptions: NotificationOptions = {
       body,
       data,
-      // icon/badge can be added later
-    })
+      icon: '/parking-feb/pwa-192x192.png',
+      badge: '/parking-feb/pwa-192x192.png',
+      tag: `booking-${data.bookingId || Date.now()}`,
+      requireInteraction: false,
+      vibrate: [200, 100, 200],
+      timestamp: Date.now(),
+    }
+
+    self.registration.showNotification(title, notificationOptions)
+      .then(() => {
+        console.log('[SW] Notification shown successfully')
+      })
+      .catch((err) => {
+        console.error('[SW] Error showing notification:', err)
+      })
   })
 }
 
