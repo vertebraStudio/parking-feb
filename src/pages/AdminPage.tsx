@@ -38,7 +38,7 @@ export default function AdminPage() {
   const [loadingSpotBlocks, setLoadingSpotBlocks] = useState(false)
   const [selectedDayForList, setSelectedDayForList] = useState<number | null>(null) // Día seleccionado para ver lista (0-4: L-V, null: todas)
   const [spotsToBlock, setSpotsToBlock] = useState<number>(0) // Número de plazas a bloquear
-  const [showConfirmedBookings, setShowConfirmedBookings] = useState<boolean>(true) // Mostrar reservas confirmadas
+  const [showConfirmedBookings, setShowConfirmedBookings] = useState<boolean>(false) // Mostrar reservas confirmadas
   
   // Estados para modales
   const [showBlockModal, setShowBlockModal] = useState(false)
@@ -519,13 +519,39 @@ export default function AdminPage() {
 
       if (error) throw error
 
-      // Notificar al usuario (in-app + push). No bloquear si falla.
-      try {
-        await supabase.functions.invoke('notify-booking-confirmed', {
-          body: { bookingId },
-        })
-      } catch (notifyErr) {
-        console.warn('notify-booking-confirmed failed:', notifyErr)
+      // Obtener la reserva para crear la notificación
+      const { data: booking, error: bookingError } = await supabase
+        .from('bookings')
+        .select('id, user_id, date, status')
+        .eq('id', bookingId)
+        .single()
+
+      if (!bookingError && booking) {
+        // Insertar notificación directamente (admin tiene permiso por RLS)
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: booking.user_id,
+            type: 'booking_confirmed',
+            title: '✅ Reserva confirmada',
+            body: `Tu reserva para el día ${booking.date} ha sido confirmada.`,
+            data: { bookingId: booking.id, date: booking.date },
+          })
+
+        if (notifError) {
+          console.error('Error inserting notification:', notifError)
+        } else {
+          console.log('Notification created successfully')
+        }
+
+        // Opcional: intentar enviar push vía Edge Function (no bloquea si falla)
+        try {
+          await supabase.functions.invoke('notify-booking-confirmed', {
+            body: { bookingId },
+          })
+        } catch (pushErr) {
+          console.warn('Push notification failed (non-blocking):', pushErr)
+        }
       }
 
       // Cerrar el modal primero

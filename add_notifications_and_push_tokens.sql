@@ -75,7 +75,22 @@ CREATE POLICY "Users can update own notifications"
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
--- Inserts: intencionadamente sin policy (se harán con service_role / Edge Function)
+-- Admins pueden insertar notificaciones
+DROP POLICY IF EXISTS "Admins can insert notifications" ON public.notifications;
+CREATE POLICY "Admins can insert notifications"
+  ON public.notifications FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.profiles
+      WHERE id = auth.uid() AND role = 'admin'
+    )
+  );
+
+-- Usuarios pueden borrar sus propias notificaciones
+DROP POLICY IF EXISTS "Users can delete own notifications" ON public.notifications;
+CREATE POLICY "Users can delete own notifications"
+  ON public.notifications FOR DELETE
+  USING (auth.uid() = user_id);
 
 COMMENT ON TABLE public.notifications IS 'Notificaciones in-app del usuario (fuente de verdad).';
 COMMENT ON COLUMN public.notifications.type IS 'Tipo de notificación, e.g. booking_confirmed';
