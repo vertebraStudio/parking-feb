@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Car, Calendar, Settings, User } from 'lucide-react'
+import { Bell, Car, Calendar, Settings, User } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { supabase } from '../lib/supabase'
 import { Profile } from '../types'
@@ -41,6 +41,7 @@ export default function Layout() {
   const allNavItems = [
     { path: '/', icon: Car, label: 'Parking' },
     { path: '/bookings', icon: Calendar, label: 'Mis Reservas' },
+    { path: '/notifications', icon: Bell, label: 'Notificaciones' },
     { path: '/admin', icon: Settings, label: 'Admin' },
     { path: '/profile', icon: User, label: 'Mi Perfil' },
   ]

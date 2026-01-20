@@ -50,3 +50,16 @@ export interface SpotBlock {
   created_by: string
   created_at: string
 }
+
+export type NotificationType = 'booking_confirmed'
+
+export interface AppNotification {
+  id: string
+  user_id: string
+  type: NotificationType | string
+  title: string
+  body: string
+  data: Record<string, any>
+  read_at: string | null
+  created_at: string
+}

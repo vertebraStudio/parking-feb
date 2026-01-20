@@ -509,14 +509,24 @@ export default function AdminPage() {
     setProcessing(true)
     setError(null)
     try {
+      const bookingId = bookingToConfirm.id
       // Solo aceptar desde waitlist (mover a confirmed)
       // El botón "Aceptar" solo aparece para reservas en waitlist
       const { error } = await supabase
         .from('bookings')
         .update({ status: 'confirmed' })
-        .eq('id', bookingToConfirm.id)
+        .eq('id', bookingId)
 
       if (error) throw error
+
+      // Notificar al usuario (in-app + push). No bloquear si falla.
+      try {
+        await supabase.functions.invoke('notify-booking-confirmed', {
+          body: { bookingId },
+        })
+      } catch (notifyErr) {
+        console.warn('notify-booking-confirmed failed:', notifyErr)
+      }
 
       // Cerrar el modal primero
       setShowConfirmBookingModal(false)

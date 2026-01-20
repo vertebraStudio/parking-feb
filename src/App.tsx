@@ -8,6 +8,7 @@ import MapPage from './pages/MapPage'
 import BookingsPage from './pages/BookingsPage'
 import AdminPage from './pages/AdminPage'
 import ProfilePage from './pages/ProfilePage'
+import NotificationsPage from './pages/NotificationsPage'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
 
 function App() {
@@ -83,6 +84,7 @@ function App() {
           <Route path="/" element={<Layout />}>
             <Route index element={<MapPage />} />
             <Route path="bookings" element={<BookingsPage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
             <Route path="admin" element={<AdminPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="profile/:userId" element={<ProfilePage />} />
