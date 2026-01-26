@@ -62,8 +62,6 @@ function showNotification(title: string, body: string, data: any = {}) {
     badge: '/parking-feb/pwa-192x192.png',
     tag: `booking-${data.bookingId || Date.now()}`,
     requireInteraction: false,
-    silent: false,
-    actions: [],
   }
 
   return self.registration.showNotification(title, notificationOptions)
