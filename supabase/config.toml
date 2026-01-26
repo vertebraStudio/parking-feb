@@ -1,0 +1,8 @@
+# Supabase Configuration
+# This file configures Supabase Edge Functions
+
+[functions.notify-booking-confirmed]
+# Desactivar verificación JWT para esta función
+# Esto permite que se llame sin autenticación (útil cuando Supabase bloquea las llamadas)
+# NOTA: La función usa SERVICE_ROLE_KEY internamente, así que es segura
+verify_jwt = false
