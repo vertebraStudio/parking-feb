@@ -573,29 +573,51 @@ export default function AdminPage() {
             })
             pushResult = result.data
             pushErr = result.error
+            console.log('supabase.functions.invoke() result:', { data: pushResult, error: pushErr })
           } catch (invokeError: any) {
             // Si falla, intentar con fetch directo como fallback
-            console.warn('supabase.functions.invoke() failed, trying direct fetch:', invokeError)
+            console.warn('⚠️ supabase.functions.invoke() failed, trying direct fetch:', invokeError)
+            console.log('Error details:', {
+              message: invokeError.message,
+              name: invokeError.name,
+              status: invokeError.status,
+            })
             
             const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
             const functionUrl = `${supabaseUrl}/functions/v1/notify-booking-confirmed`
             
-            const response = await fetch(functionUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${session.access_token}`,
-                'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || '',
-              },
-              body: JSON.stringify({ bookingId }),
-            })
+            console.log('Attempting direct fetch to:', functionUrl)
+            console.log('Using token:', session.access_token ? `${session.access_token.substring(0, 20)}...` : 'NO TOKEN')
             
-            if (!response.ok) {
-              const errorText = await response.text()
-              throw new Error(`Edge Function returned ${response.status}: ${errorText}`)
+            try {
+              const response = await fetch(functionUrl, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${session.access_token}`,
+                  'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+                },
+                body: JSON.stringify({ bookingId }),
+              })
+              
+              console.log('Direct fetch response:', {
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok,
+              })
+              
+              if (!response.ok) {
+                const errorText = await response.text()
+                console.error('Direct fetch error response:', errorText)
+                throw new Error(`Edge Function returned ${response.status}: ${errorText}`)
+              }
+              
+              pushResult = await response.json()
+              console.log('Direct fetch success, result:', pushResult)
+            } catch (fetchError: any) {
+              console.error('❌ Direct fetch also failed:', fetchError)
+              throw fetchError
             }
-            
-            pushResult = await response.json()
           }
           
           if (pushErr) {

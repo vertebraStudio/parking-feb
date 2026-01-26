@@ -30,26 +30,27 @@ function jsonResponse(status: number, body: Json) {
 }
 
 Deno.serve(async (req) => {
-  // Log de la petición entrante para depuración
-  const authHeader = req.headers.get('authorization')
-  console.log('Edge Function called:', {
-    method: req.method,
-    url: req.url,
-    hasAuth: !!authHeader,
-    authHeaderPreview: authHeader ? `${authHeader.substring(0, 20)}...` : 'none',
-  })
+  // Log INMEDIATO al inicio para verificar que la función se ejecuta
+  console.log('🚀 ===== Edge Function notify-booking-confirmed STARTED =====')
+  console.log('Request method:', req.method)
+  console.log('Request URL:', req.url)
+  console.log('Request headers:', Object.fromEntries(req.headers.entries()))
   
-  // Si no hay autenticación, no es un problema - la función usa SERVICE_ROLE_KEY
-  // Pero Supabase puede requerir un token válido para permitir la llamada
-  if (!authHeader) {
-    console.warn('⚠️ No authorization header - this may cause 401 if function requires auth')
-  }
-
+  const authHeader = req.headers.get('authorization')
+  console.log('Authorization header present:', !!authHeader)
+  
+  // IMPORTANTE: Responder inmediatamente a OPTIONS para CORS
   if (req.method === 'OPTIONS') {
+    console.log('OPTIONS request - returning CORS headers')
     return new Response('ok', { headers: corsHeaders })
   }
 
-  if (req.method !== 'POST') return jsonResponse(405, { error: 'Method not allowed' })
+  if (req.method !== 'POST') {
+    console.log('Method not allowed:', req.method)
+    return jsonResponse(405, { error: 'Method not allowed' })
+  }
+  
+  console.log('✅ POST request received, processing...')
 
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || ''
   const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') || ''
@@ -200,11 +201,20 @@ Deno.serve(async (req) => {
     })
   }
 
-  return jsonResponse(200, {
+  const response = jsonResponse(200, {
     ok: true,
     pushed: tokenList.length,
     fcm: fcmJson,
     fcmStatus: fcmResp.status,
   })
+  
+  console.log('✅ ===== Edge Function notify-booking-confirmed COMPLETED =====')
+  console.log('Response:', {
+    ok: true,
+    pushed: tokenList.length,
+    fcmStatus: fcmResp.status,
+  })
+  
+  return response
 })
 
