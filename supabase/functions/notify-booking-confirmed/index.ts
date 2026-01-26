@@ -99,30 +99,38 @@ Deno.serve(async (req) => {
   const tokenList = (tokens || []).map((t: any) => t.token).filter(Boolean)
   if (tokenList.length === 0) return jsonResponse(200, { ok: true, pushed: 0 })
 
+  // Send push notifications to all tokens
+  const fcmPayload = {
+    registration_ids: tokenList,
+    notification: { 
+      title, 
+      body,
+      icon: '/parking-feb/pwa-192x192.png',
+      badge: '/parking-feb/pwa-192x192.png',
+      sound: 'default',
+      click_action: 'https://vertebrastudio.github.io/parking-feb/notifications',
+    },
+    data: { 
+      bookingId: String(booking.id), 
+      date: String(booking.date), 
+      type: 'booking_confirmed',
+      title,
+      body,
+      url: 'https://vertebrastudio.github.io/parking-feb/notifications',
+    },
+    priority: 'high',
+    time_to_live: 86400, // 24 hours (increased for better delivery when device is locked)
+    content_available: true, // Important for background delivery
+    mutable_content: true,
+  }
+
   const fcmResp = await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `key=${FCM_SERVER_KEY}`,
     },
-    body: JSON.stringify({
-      registration_ids: tokenList,
-      notification: { 
-        title, 
-        body,
-        icon: '/parking-feb/pwa-192x192.png',
-        badge: '/parking-feb/pwa-192x192.png',
-      },
-      data: { 
-        bookingId: String(booking.id), 
-        date: String(booking.date), 
-        type: 'booking_confirmed',
-        title,
-        body,
-      },
-      priority: 'high',
-      time_to_live: 3600, // 1 hour
-    }),
+    body: JSON.stringify(fcmPayload),
   })
 
   const fcmJson = await fcmResp.json().catch(() => ({}))

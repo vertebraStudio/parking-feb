@@ -27,6 +27,7 @@ export default defineConfig({
         scope: '/parking-feb/',
         start_url: '/parking-feb/',
         splash_pages: null,
+        gcm_sender_id: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
         icons: [
           {
             src: 'pwa-192x192.png',
