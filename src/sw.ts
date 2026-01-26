@@ -55,21 +55,37 @@ const isFirebaseConfigured =
 
 // Helper function to show notification
 function showNotification(title: string, body: string, data: any = {}) {
+  // Asegurar que tenemos permisos de notificación
+  if (!self.registration) {
+    console.error('[SW] Service worker registration not available')
+    return Promise.reject(new Error('Service worker not registered'))
+  }
+
   const notificationOptions: NotificationOptions = {
     body,
-    data,
-    icon: '/parking-feb/pwa-192x192.png',
-    badge: '/parking-feb/pwa-192x192.png',
+    data: {
+      ...data,
+      // Asegurar que la URL esté en los datos
+      url: data.url || 'https://vertebrastudio.github.io/parking-feb/notifications',
+    },
+    icon: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
+    badge: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
     tag: `booking-${data.bookingId || Date.now()}`,
     requireInteraction: false,
+    // Añadir más opciones para mejor visibilidad
+    dir: 'ltr',
+    lang: 'es',
   }
+
+  console.log('[SW] Attempting to show notification:', { title, body, options: notificationOptions })
 
   return self.registration.showNotification(title, notificationOptions)
     .then(() => {
-      console.log('[SW] Notification shown successfully:', title)
+      console.log('[SW] ✅ Notification shown successfully:', title)
     })
     .catch((err) => {
-      console.error('[SW] Error showing notification:', err)
+      console.error('[SW] ❌ Error showing notification:', err)
+      throw err
     })
 }
 
@@ -83,10 +99,41 @@ if (isFirebaseConfigured) {
     onBackgroundMessage(messaging, (payload) => {
       console.log('[SW] FCM background message received:', payload)
       
-      const title = payload.notification?.title || payload.data?.title || 'FEB parking'
-      const body = payload.notification?.body || payload.data?.body || 'Tu reserva ha sido confirmada.'
-      const data = payload.data || {}
+      // Para mensajes data-only, extraer título y cuerpo de data
+      let title = 'FEB parking'
+      let body = 'Tienes una nueva notificación'
+      let data: any = {}
 
+      // Si hay notification en el payload (raro en data-only, pero por si acaso)
+      if (payload.notification) {
+        title = payload.notification.title || title
+        body = payload.notification.body || body
+      }
+
+      // Extraer de data (para mensajes data-only)
+      if (payload.data) {
+        // Si hay un campo notification serializado en data, parsearlo
+        if (payload.data.notification) {
+          try {
+            const notifData = JSON.parse(payload.data.notification as string)
+            title = notifData.title || payload.data.title || title
+            body = notifData.body || payload.data.body || body
+          } catch {
+            // Si falla el parse, usar directamente
+            title = payload.data.title || title
+            body = payload.data.body || body
+          }
+        } else {
+          title = payload.data.title || title
+          body = payload.data.body || body
+        }
+        
+        // Copiar todos los datos excepto notification (ya procesado)
+        data = { ...payload.data }
+        delete data.notification
+      }
+
+      console.log('[SW] Showing notification:', { title, body, data })
       showNotification(title, body, data)
     })
   } catch (err) {

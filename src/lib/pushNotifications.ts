@@ -41,6 +41,8 @@ export async function registerPushTokenForCurrentUser(): Promise<{
   }
 
   const now = new Date().toISOString()
+  
+  // Usar upsert con mejor manejo de errores
   const { error } = await supabase
     .from('push_tokens')
     .upsert(
@@ -50,10 +52,20 @@ export async function registerPushTokenForCurrentUser(): Promise<{
         platform: 'web',
         last_seen_at: now,
       },
-      { onConflict: 'token' }
+      { 
+        onConflict: 'token',
+        ignoreDuplicates: false
+      }
     )
 
-  if (error) throw error
+  if (error) {
+    console.error('Error upserting push token:', error)
+    // Si es un error de RLS, dar un mensaje más claro
+    if (error.message?.includes('row-level security')) {
+      throw new Error('Error de permisos: verifica que estés autenticado correctamente.')
+    }
+    throw new Error(`Error al guardar token: ${error.message}`)
+  }
 
   return { permission, token }
 }

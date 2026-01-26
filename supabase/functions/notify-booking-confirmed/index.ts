@@ -100,16 +100,11 @@ Deno.serve(async (req) => {
   if (tokenList.length === 0) return jsonResponse(200, { ok: true, pushed: 0 })
 
   // Send push notifications to all tokens
+  // IMPORTANTE: Usar solo "data" (data-only message) para que el service worker lo procese
+  // Esto es necesario para que funcione cuando el dispositivo está bloqueado
   const fcmPayload = {
     registration_ids: tokenList,
-    notification: { 
-      title, 
-      body,
-      icon: '/parking-feb/pwa-192x192.png',
-      badge: '/parking-feb/pwa-192x192.png',
-      sound: 'default',
-      click_action: 'https://vertebrastudio.github.io/parking-feb/notifications',
-    },
+    // NO incluir "notification" - solo "data" para que el SW lo maneje
     data: { 
       bookingId: String(booking.id), 
       date: String(booking.date), 
@@ -117,11 +112,17 @@ Deno.serve(async (req) => {
       title,
       body,
       url: 'https://vertebrastudio.github.io/parking-feb/notifications',
+      // Añadir estos campos para que el SW pueda construir la notificación
+      notification: JSON.stringify({
+        title,
+        body,
+        icon: '/parking-feb/pwa-192x192.png',
+        badge: '/parking-feb/pwa-192x192.png',
+      }),
     },
     priority: 'high',
-    time_to_live: 86400, // 24 hours (increased for better delivery when device is locked)
-    content_available: true, // Important for background delivery
-    mutable_content: true,
+    time_to_live: 86400, // 24 hours
+    content_available: true, // Critical for background delivery
   }
 
   const fcmResp = await fetch('https://fcm.googleapis.com/fcm/send', {
@@ -134,11 +135,25 @@ Deno.serve(async (req) => {
   })
 
   const fcmJson = await fcmResp.json().catch(() => ({}))
+  
+  // Log para depuración
+  console.log('FCM Response:', {
+    status: fcmResp.status,
+    statusText: fcmResp.statusText,
+    response: fcmJson,
+    tokensSent: tokenList.length,
+  })
+
+  // Verificar si hubo errores en la respuesta de FCM
+  if (fcmJson.failure && fcmJson.failure > 0) {
+    console.error('FCM delivery failures:', fcmJson.results)
+  }
 
   return jsonResponse(200, {
     ok: true,
     pushed: tokenList.length,
     fcm: fcmJson,
+    fcmStatus: fcmResp.status,
   })
 })
 
