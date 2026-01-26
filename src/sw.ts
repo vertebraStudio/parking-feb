@@ -33,7 +33,7 @@ self.addEventListener('activate', (event: ExtendableEvent) => {
 self.addEventListener('install', (event: ExtendableEvent) => {
   console.log('[SW] Service worker installing')
   // Force activation of new service worker
-  self.skipWaiting()
+  event.waitUntil(self.skipWaiting())
 })
 
 // Firebase (FCM) config via Vite env at build time
@@ -62,7 +62,6 @@ function showNotification(title: string, body: string, data: any = {}) {
     badge: '/parking-feb/pwa-192x192.png',
     tag: `booking-${data.bookingId || Date.now()}`,
     requireInteraction: false,
-    timestamp: Date.now(),
     silent: false,
     renotify: true,
     actions: [],
