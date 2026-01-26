@@ -548,22 +548,55 @@ export default function AdminPage() {
         try {
           console.log('Calling Edge Function notify-booking-confirmed with bookingId:', bookingId)
           
-          // Obtener el token de sesión para pasarlo explícitamente
+          // Verificar que hay sesión activa
           const { data: { session }, error: sessionError } = await supabase.auth.getSession()
           
           if (sessionError) {
             console.error('Error getting session:', sessionError)
+            throw new Error('No hay sesión activa')
           }
           
-          const authToken = session?.access_token
-          console.log('Session token available:', !!authToken)
+          if (!session) {
+            console.error('No active session found')
+            throw new Error('No hay sesión activa')
+          }
           
-          const { data: pushResult, error: pushErr } = await supabase.functions.invoke('notify-booking-confirmed', {
-            body: { bookingId },
-            headers: authToken ? {
-              Authorization: `Bearer ${authToken}`,
-            } : {},
-          })
+          console.log('Session token available:', !!session.access_token)
+          
+          // Intentar primero con supabase.functions.invoke() (pasa token automáticamente)
+          let pushResult: any = null
+          let pushErr: any = null
+          
+          try {
+            const result = await supabase.functions.invoke('notify-booking-confirmed', {
+              body: { bookingId },
+            })
+            pushResult = result.data
+            pushErr = result.error
+          } catch (invokeError: any) {
+            // Si falla, intentar con fetch directo como fallback
+            console.warn('supabase.functions.invoke() failed, trying direct fetch:', invokeError)
+            
+            const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+            const functionUrl = `${supabaseUrl}/functions/v1/notify-booking-confirmed`
+            
+            const response = await fetch(functionUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session.access_token}`,
+                'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+              },
+              body: JSON.stringify({ bookingId }),
+            })
+            
+            if (!response.ok) {
+              const errorText = await response.text()
+              throw new Error(`Edge Function returned ${response.status}: ${errorText}`)
+            }
+            
+            pushResult = await response.json()
+          }
           
           if (pushErr) {
             console.error('❌ Edge Function error:', pushErr)
