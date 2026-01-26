@@ -30,6 +30,21 @@ function jsonResponse(status: number, body: Json) {
 }
 
 Deno.serve(async (req) => {
+  // Log de la petición entrante para depuración
+  const authHeader = req.headers.get('authorization')
+  console.log('Edge Function called:', {
+    method: req.method,
+    url: req.url,
+    hasAuth: !!authHeader,
+    authHeaderPreview: authHeader ? `${authHeader.substring(0, 20)}...` : 'none',
+  })
+  
+  // Si no hay autenticación, no es un problema - la función usa SERVICE_ROLE_KEY
+  // Pero Supabase puede requerir un token válido para permitir la llamada
+  if (!authHeader) {
+    console.warn('⚠️ No authorization header - this may cause 401 if function requires auth')
+  }
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }

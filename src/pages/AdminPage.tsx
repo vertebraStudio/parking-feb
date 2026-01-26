@@ -547,8 +547,22 @@ export default function AdminPage() {
         // Intentar enviar push vía Edge Function (no bloquea si falla)
         try {
           console.log('Calling Edge Function notify-booking-confirmed with bookingId:', bookingId)
+          
+          // Obtener el token de sesión para pasarlo explícitamente
+          const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+          
+          if (sessionError) {
+            console.error('Error getting session:', sessionError)
+          }
+          
+          const authToken = session?.access_token
+          console.log('Session token available:', !!authToken)
+          
           const { data: pushResult, error: pushErr } = await supabase.functions.invoke('notify-booking-confirmed', {
             body: { bookingId },
+            headers: authToken ? {
+              Authorization: `Bearer ${authToken}`,
+            } : {},
           })
           
           if (pushErr) {
