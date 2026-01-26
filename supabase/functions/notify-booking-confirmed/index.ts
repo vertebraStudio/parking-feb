@@ -115,11 +115,19 @@ Deno.serve(async (req) => {
   console.log('Sending push to tokens:', tokenList.length)
 
   // Send push notifications to all tokens
-  // IMPORTANTE: Usar solo "data" (data-only message) para que el service worker lo procese
-  // Esto es necesario para que funcione cuando el dispositivo está bloqueado
+  // ESTRATEGIA: Usar tanto "notification" como "data"
+  // - "notification": FCM muestra la notificación automáticamente (funciona cuando dispositivo activo)
+  // - "data": El service worker también recibe el mensaje vía onBackgroundMessage (funciona cuando bloqueado)
   const fcmPayload = {
     registration_ids: tokenList,
-    // NO incluir "notification" - solo "data" para que el SW lo maneje
+    notification: {
+      title,
+      body,
+      icon: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
+      badge: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
+      sound: 'default',
+      click_action: 'https://vertebrastudio.github.io/parking-feb/notifications',
+    },
     data: { 
       bookingId: String(booking.id), 
       date: String(booking.date), 
@@ -127,18 +135,13 @@ Deno.serve(async (req) => {
       title,
       body,
       url: 'https://vertebrastudio.github.io/parking-feb/notifications',
-      // Añadir estos campos para que el SW pueda construir la notificación
-      notification: JSON.stringify({
-        title,
-        body,
-        icon: '/parking-feb/pwa-192x192.png',
-        badge: '/parking-feb/pwa-192x192.png',
-      }),
     },
     priority: 'high',
     time_to_live: 86400, // 24 hours
     content_available: true, // Critical for background delivery
   }
+  
+  console.log('📤 Sending FCM payload to', tokenList.length, 'token(s)')
 
   const fcmResp = await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',

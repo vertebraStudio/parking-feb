@@ -544,13 +544,32 @@ export default function AdminPage() {
           console.log('Notification created successfully')
         }
 
-        // Opcional: intentar enviar push vía Edge Function (no bloquea si falla)
+        // Intentar enviar push vía Edge Function (no bloquea si falla)
         try {
-          await supabase.functions.invoke('notify-booking-confirmed', {
+          console.log('Calling Edge Function notify-booking-confirmed with bookingId:', bookingId)
+          const { data: pushResult, error: pushErr } = await supabase.functions.invoke('notify-booking-confirmed', {
             body: { bookingId },
           })
-        } catch (pushErr) {
-          console.warn('Push notification failed (non-blocking):', pushErr)
+          
+          if (pushErr) {
+            console.error('❌ Edge Function error:', pushErr)
+          } else {
+            console.log('✅ Edge Function response:', pushResult)
+            if (pushResult?.pushed === 0) {
+              console.warn('⚠️ No push tokens found for user or FCM_SERVER_KEY not set')
+            } else if (pushResult?.fcm?.failure > 0) {
+              console.error('❌ FCM delivery failures:', pushResult.fcm)
+            } else if (pushResult?.pushed > 0) {
+              console.log('✅ Push notification sent successfully to', pushResult.pushed, 'device(s)')
+            }
+          }
+        } catch (pushErr: any) {
+          console.error('❌ Push notification failed (non-blocking):', pushErr)
+          console.error('Error details:', {
+            message: pushErr.message,
+            cause: pushErr.cause,
+            stack: pushErr.stack,
+          })
         }
       }
 

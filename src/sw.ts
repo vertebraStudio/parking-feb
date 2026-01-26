@@ -98,37 +98,42 @@ if (isFirebaseConfigured) {
     console.log('[SW] ✅ Firebase FCM initialized')
 
     // FCM background message handler
-    // NOTA: Este puede no funcionar en iOS, por eso tenemos el listener 'push' estándar
+    // IMPORTANTE: Este handler se llama cuando el dispositivo está en background o bloqueado
+    // Incluso si el payload tiene "notification", este handler se ejecuta para que podamos
+    // mostrar la notificación cuando el dispositivo está bloqueado
     onBackgroundMessage(messaging, (payload) => {
-      console.log('[SW] 🔔 FCM background message received:', payload)
+      console.log('[SW] 🔔 FCM background message received (onBackgroundMessage):', payload)
       
-      // Para mensajes data-only, extraer título y cuerpo de data
       let title = 'FEB parking'
       let body = 'Tienes una nueva notificación'
       let data: any = {}
 
-      // Si hay notification en el payload (raro en data-only, pero por si acaso)
+      // Prioridad 1: Usar notification del payload si existe
       if (payload.notification) {
         title = payload.notification.title || title
         body = payload.notification.body || body
+        console.log('[SW] Using notification from payload.notification')
       }
 
-      // Extraer de data (para mensajes data-only)
+      // Prioridad 2: Usar data del payload
       if (payload.data) {
         // Si hay un campo notification serializado en data, parsearlo
-        if (payload.data.notification) {
+        if (payload.data.notification && typeof payload.data.notification === 'string') {
           try {
-            const notifData = JSON.parse(payload.data.notification as string)
+            const notifData = JSON.parse(payload.data.notification)
             title = notifData.title || payload.data.title || title
             body = notifData.body || payload.data.body || body
+            console.log('[SW] Using notification from payload.data.notification (parsed)')
           } catch {
-            // Si falla el parse, usar directamente
             title = payload.data.title || title
             body = payload.data.body || body
+            console.log('[SW] Using notification from payload.data (fallback)')
           }
         } else {
-          title = payload.data.title || title
-          body = payload.data.body || body
+          // Usar directamente de data
+          title = payload.data.title || payload.notification?.title || title
+          body = payload.data.body || payload.notification?.body || body
+          console.log('[SW] Using notification from payload.data')
         }
         
         // Copiar todos los datos excepto notification (ya procesado)
@@ -136,8 +141,14 @@ if (isFirebaseConfigured) {
         delete data.notification
       }
 
-      console.log('[SW] Showing notification:', { title, body, data })
+      console.log('[SW] 📤 About to show notification via onBackgroundMessage:', { title, body, data })
+      
+      // SIEMPRE mostrar la notificación, incluso si FCM ya la mostró automáticamente
+      // Esto asegura que funcione cuando el dispositivo está bloqueado
       showNotification(title, body, data)
+        .catch((err) => {
+          console.error('[SW] ❌ Failed to show notification in onBackgroundMessage:', err)
+        })
     })
   } catch (err) {
     console.error('[SW] Error initializing Firebase:', err)
