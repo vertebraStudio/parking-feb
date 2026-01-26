@@ -63,7 +63,6 @@ function showNotification(title: string, body: string, data: any = {}) {
     tag: `booking-${data.bookingId || Date.now()}`,
     requireInteraction: false,
     silent: false,
-    renotify: true,
     actions: [],
   }
 
