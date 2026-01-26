@@ -91,13 +91,28 @@ Deno.serve(async (req) => {
 
   const { data: tokens, error: tokensErr } = await serviceClient
     .from('push_tokens')
-    .select('token')
+    .select('token, platform, created_at')
     .eq('user_id', booking.user_id)
 
-  if (tokensErr) return jsonResponse(200, { ok: true, pushed: 0, note: 'No tokens' })
+  console.log('Tokens found for user:', {
+    userId: booking.user_id,
+    count: tokens?.length || 0,
+    tokens: tokens?.map((t: any) => ({ platform: t.platform, created: t.created_at })),
+    error: tokensErr,
+  })
+
+  if (tokensErr) {
+    console.error('Error fetching tokens:', tokensErr)
+    return jsonResponse(200, { ok: true, pushed: 0, note: 'Error fetching tokens', error: tokensErr.message })
+  }
 
   const tokenList = (tokens || []).map((t: any) => t.token).filter(Boolean)
-  if (tokenList.length === 0) return jsonResponse(200, { ok: true, pushed: 0 })
+  if (tokenList.length === 0) {
+    console.log('No tokens found for user:', booking.user_id)
+    return jsonResponse(200, { ok: true, pushed: 0, note: 'No tokens found' })
+  }
+
+  console.log('Sending push to tokens:', tokenList.length)
 
   // Send push notifications to all tokens
   // IMPORTANTE: Usar solo "data" (data-only message) para que el service worker lo procese
@@ -146,7 +161,25 @@ Deno.serve(async (req) => {
 
   // Verificar si hubo errores en la respuesta de FCM
   if (fcmJson.failure && fcmJson.failure > 0) {
-    console.error('FCM delivery failures:', fcmJson.results)
+    console.error('❌ FCM delivery failures:', {
+      total: fcmJson.failure,
+      success: fcmJson.success,
+      results: fcmJson.results,
+    })
+    
+    // Log cada error individual
+    if (fcmJson.results && Array.isArray(fcmJson.results)) {
+      fcmJson.results.forEach((result: any, index: number) => {
+        if (result.error) {
+          console.error(`Token ${index} error:`, result.error, 'Token:', tokenList[index]?.substring(0, 20) + '...')
+        }
+      })
+    }
+  } else if (fcmJson.success && fcmJson.success > 0) {
+    console.log('✅ FCM delivery success:', {
+      total: fcmJson.success,
+      failure: fcmJson.failure || 0,
+    })
   }
 
   return jsonResponse(200, {

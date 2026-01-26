@@ -90,14 +90,17 @@ function showNotification(title: string, body: string, data: any = {}) {
 }
 
 // Initialize Firebase FCM if configured
+// NOTA: FCM puede no funcionar en iOS, por lo que el listener 'push' estándar es crítico
 if (isFirebaseConfigured) {
   try {
     const app = initializeApp(firebaseConfig)
     const messaging = getMessaging(app)
+    console.log('[SW] ✅ Firebase FCM initialized')
 
     // FCM background message handler
+    // NOTA: Este puede no funcionar en iOS, por eso tenemos el listener 'push' estándar
     onBackgroundMessage(messaging, (payload) => {
-      console.log('[SW] FCM background message received:', payload)
+      console.log('[SW] 🔔 FCM background message received:', payload)
       
       // Para mensajes data-only, extraer título y cuerpo de data
       let title = 'FEB parking'
@@ -142,8 +145,11 @@ if (isFirebaseConfigured) {
 }
 
 // Standard Web Push event listener (fallback for when FCM doesn't work)
+// IMPORTANTE: Este es el listener principal para iOS, ya que FCM puede no funcionar en iOS
 self.addEventListener('push', (event: PushEvent) => {
-  console.log('[SW] Push event received:', event)
+  console.log('[SW] 🔔 Push event received (Web Push standard):', event)
+  console.log('[SW] Event has data:', !!event.data)
+  console.log('[SW] Event type:', event.type)
 
   let title = 'FEB parking'
   let body = 'Tienes una nueva notificación'
@@ -152,27 +158,58 @@ self.addEventListener('push', (event: PushEvent) => {
   if (event.data) {
     try {
       const payload = event.data.json()
-      console.log('[SW] Push payload:', payload)
+      console.log('[SW] 📦 Push payload (JSON):', payload)
       
-      title = payload.notification?.title || payload.data?.title || payload.title || title
-      body = payload.notification?.body || payload.data?.body || payload.body || body
-      data = payload.data || payload
+      // Intentar extraer de diferentes estructuras
+      if (payload.notification) {
+        title = payload.notification.title || title
+        body = payload.notification.body || body
+      }
+      
+      if (payload.data) {
+        // Si hay un campo notification serializado en data, parsearlo
+        if (payload.data.notification) {
+          try {
+            const notifData = JSON.parse(payload.data.notification as string)
+            title = notifData.title || payload.data.title || title
+            body = notifData.body || payload.data.body || body
+          } catch {
+            title = payload.data.title || title
+            body = payload.data.body || body
+          }
+        } else {
+          title = payload.data.title || title
+          body = payload.data.body || body
+        }
+        data = { ...payload.data }
+        delete data.notification
+      } else if (payload.title || payload.body) {
+        title = payload.title || title
+        body = payload.body || body
+        data = payload
+      }
     } catch (err) {
+      console.log('[SW] ⚠️ JSON parse failed, trying text:', err)
       // If JSON parsing fails, try text
-      const text = event.data.text()
-      console.log('[SW] Push data as text:', text)
       try {
+        const text = event.data.text()
+        console.log('[SW] 📝 Push data as text:', text)
         const payload = JSON.parse(text)
         title = payload.notification?.title || payload.data?.title || payload.title || title
         body = payload.notification?.body || payload.data?.body || payload.body || body
         data = payload.data || payload
       } catch {
         // If all fails, use default
+        const text = event.data.text()
         body = text || body
+        console.log('[SW] ⚠️ All parsing failed, using text as body')
       }
     }
+  } else {
+    console.log('[SW] ⚠️ Push event has no data')
   }
 
+  console.log('[SW] 📤 About to show notification:', { title, body, data })
   event.waitUntil(showNotification(title, body, data))
 })
 
