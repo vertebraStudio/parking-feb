@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { User, Clock, CheckCircle, X, UserPlus, Users } from 'lucide-react'
 import { Booking, Profile } from '../types'
 import { cn } from '../lib/utils'
+import ConfirmModal from './ui/ConfirmModal'
 
 interface DayBookingsListProps {
   date: string
@@ -19,6 +21,10 @@ export default function DayBookingsList({
   onCancelBooking,
   currentUserId,
 }: DayBookingsListProps) {
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null)
+  const [cancelling, setCancelling] = useState(false)
+
   // Filtrar reservas para esta fecha (excluyendo canceladas)
   const allDayBookings = bookings.filter(
     b => b.date === date && b.status !== 'cancelled'
@@ -49,13 +55,41 @@ export default function DayBookingsList({
     return format(date, 'EEEE, d MMMM yyyy', { locale: es })
   }
 
+  const handleCancelClick = (booking: Booking) => {
+    setBookingToCancel(booking)
+    setShowCancelModal(true)
+  }
+
+  const handleConfirmCancel = async () => {
+    if (!bookingToCancel || !onCancelBooking) return
+
+    setCancelling(true)
+    try {
+      await onCancelBooking(bookingToCancel.id)
+      setShowCancelModal(false)
+      setBookingToCancel(null)
+    } catch (error) {
+      console.error('Error canceling booking:', error)
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
+    <div 
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end justify-center p-4"
+      style={{
+        animation: 'fadeIn 0.2s ease-out',
+      }}
+      onClick={onClose}
+    >
       <div 
-        className="bg-white rounded-t-[24px] sm:rounded-[24px] w-full max-w-md max-h-[80vh] flex flex-col shadow-2xl"
+        className="bg-white rounded-t-[24px] w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl"
         style={{
           fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
+          animation: 'slideUp 0.3s ease-out',
         }}
+        onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-gray-200">
@@ -136,15 +170,29 @@ export default function DayBookingsList({
                               )}
                             </div>
                           </div>
-                          {isCurrentUser && onCancelBooking && (
+                          {isCurrentUser && onCancelBooking && booking.status === 'waitlist' ? (
                             <button
-                              onClick={() => onCancelBooking(booking.id)}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleCancelClick(booking)
+                              }}
+                              className="ml-3 p-2 rounded-[10px] bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors active:scale-95 flex-shrink-0"
+                              title="Salir de lista de espera"
+                            >
+                              <X className="w-4 h-4" strokeWidth={2.5} />
+                            </button>
+                          ) : isCurrentUser && onCancelBooking ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleCancelClick(booking)
+                              }}
                               className="ml-3 p-2 rounded-[10px] bg-red-100 text-red-700 hover:bg-red-200 transition-colors active:scale-95 flex-shrink-0"
                               title="Cancelar reserva"
                             >
                               <X className="w-4 h-4" strokeWidth={2.5} />
                             </button>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                     )
@@ -193,8 +241,11 @@ export default function DayBookingsList({
                           </div>
                           {isCurrentUser && onCancelBooking && (
                             <button
-                              onClick={() => onCancelBooking(booking.id)}
-                              className="ml-3 p-2 rounded-[10px] bg-red-100 text-red-700 hover:bg-red-200 transition-colors active:scale-95 flex-shrink-0"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleCancelClick(booking)
+                              }}
+                              className="ml-3 p-2 rounded-[10px] bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors active:scale-95 flex-shrink-0"
                               title="Salir de lista de espera"
                             >
                               <X className="w-4 h-4" strokeWidth={2.5} />
@@ -222,6 +273,25 @@ export default function DayBookingsList({
           </p>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={showCancelModal}
+        onClose={() => {
+          setShowCancelModal(false)
+          setBookingToCancel(null)
+        }}
+        onConfirm={handleConfirmCancel}
+        title={bookingToCancel?.status === 'waitlist' ? 'Salir de lista de espera' : 'Cancelar reserva'}
+        message={
+          bookingToCancel?.status === 'waitlist'
+            ? `¿Estás seguro de que deseas salir de la lista de espera para el ${formatDateDisplay(date)}?`
+            : `¿Estás seguro de que deseas cancelar tu reserva para el ${formatDateDisplay(date)}?`
+        }
+        confirmText={bookingToCancel?.status === 'waitlist' ? 'Sí, salir' : 'Sí, cancelar'}
+        cancelText="No, mantener"
+        loading={cancelling}
+        confirmButtonClass={bookingToCancel?.status === 'waitlist' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-red-600 hover:bg-red-700'}
+      />
     </div>
   )
 }

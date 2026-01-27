@@ -147,18 +147,27 @@ export default function WeekDaysView({
               {/* Información del día */}
               <div className="flex items-center gap-3 flex-1">
                 <div className="flex-shrink-0">
-                  <Calendar 
-                    className={cn(
-                      "w-6 h-6",
-                      isPast ? "text-gray-400" :
-                      hasBooking && bookingStatus === 'confirmed' ? "text-orange-600" :
-                      hasBooking && bookingStatus === 'pending' ? "text-amber-600" :
-                      hasBooking && bookingStatus === 'waitlist' ? "text-purple-600" :
-                      full ? "text-red-500" :
-                      "text-gray-600"
-                    )} 
-                    strokeWidth={2.5} 
-                  />
+                  {hasBooking && bookingStatus === 'waitlist' ? (
+                    <Clock 
+                      className={cn(
+                        "w-6 h-6",
+                        isPast ? "text-gray-400" : "text-purple-600"
+                      )} 
+                      strokeWidth={2.5} 
+                    />
+                  ) : (
+                    <Calendar 
+                      className={cn(
+                        "w-6 h-6",
+                        isPast ? "text-gray-400" :
+                        hasBooking && bookingStatus === 'confirmed' ? "text-orange-600" :
+                        hasBooking && bookingStatus === 'pending' ? "text-amber-600" :
+                        full ? "text-red-500" :
+                        "text-gray-600"
+                      )} 
+                      strokeWidth={2.5} 
+                    />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Trash2 } from 'lucide-react'
@@ -6,12 +7,16 @@ import { supabase } from '../lib/supabase'
 import { registerPushTokenForCurrentUser } from '../lib/pushNotifications'
 import { isFirebaseConfigured } from '../lib/firebase'
 import type { AppNotification } from '../types'
+import ConfirmModal from '../components/ui/ConfirmModal'
 
 export default function NotificationsPage() {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<AppNotification[]>([])
   const [error, setError] = useState<string | null>(null)
   const [pushStatus, setPushStatus] = useState<'idle' | 'enabling' | 'enabled'>('idle')
+  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
 
   const unreadCount = useMemo(() => items.filter(n => !n.read_at).length, [items])
 
@@ -163,6 +168,32 @@ export default function NotificationsPage() {
     }
   }
 
+  const handleDeleteAll = async () => {
+    setDeletingAll(true)
+    setError(null)
+    try {
+      const { data: auth } = await supabase.auth.getUser()
+      if (!auth.user) {
+        setError('Debes iniciar sesión para borrar notificaciones.')
+        return
+      }
+
+      const { error: deleteError } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('user_id', auth.user.id)
+
+      if (deleteError) throw deleteError
+
+      setItems([])
+      setShowDeleteAllModal(false)
+    } catch (e: any) {
+      setError(e.message || 'Error al borrar todas las notificaciones')
+    } finally {
+      setDeletingAll(false)
+    }
+  }
+
   return (
     <div className="p-4 min-h-screen bg-white">
       <h1
@@ -190,10 +221,7 @@ export default function NotificationsPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-gray-700 font-medium">
-              {pushStatus === 'enabled' ? 'Notificaciones activadas' : 'Notificaciones desactivadas'}
-            </span>
+          <div className="flex flex-col items-end gap-2">
             <button
               onClick={handlePushToggle}
               disabled={pushStatus === 'enabling' || !isFirebaseConfigured}
@@ -207,6 +235,9 @@ export default function NotificationsPage() {
                 }`}
               />
             </button>
+            <span className="text-xs text-gray-500">
+              {pushStatus === 'enabled' ? 'Notificaciones activadas' : 'Notificaciones desactivadas'}
+            </span>
           </div>
         </div>
         {!isFirebaseConfigured && (
@@ -219,6 +250,18 @@ export default function NotificationsPage() {
           <p className="text-gray-600 text-xs mt-3">Activando notificaciones push...</p>
         )}
       </div>
+
+      {items.length > 0 && (
+        <div className="mb-4">
+          <button
+            onClick={() => setShowDeleteAllModal(true)}
+            className="w-full px-4 py-2.5 rounded-[14px] border border-gray-300 bg-gray-50 hover:bg-gray-100 active:scale-95 transition-colors flex items-center justify-center gap-2"
+          >
+            <Trash2 className="w-4 h-4 text-gray-600" strokeWidth={2} />
+            <span className="text-gray-700 font-semibold text-sm">Borrar todas las notificaciones</span>
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 p-3 rounded-[14px] border border-red-300 bg-red-50">
@@ -234,7 +277,7 @@ export default function NotificationsPage() {
         <div className="rounded-[20px] p-4 border border-gray-200 bg-white">
           <p className="text-gray-700 font-medium">No tienes notificaciones todavía.</p>
           <p className="text-gray-600 text-sm mt-1">
-            Cuando un admin confirme una reserva, aparecerá aquí y te llegará una push.
+            Tus notificaciones aparecerán aquí.
           </p>
         </div>
       ) : (
@@ -245,7 +288,16 @@ export default function NotificationsPage() {
               className="relative rounded-[20px] p-4 border border-gray-200 bg-white"
             >
               <button
-                onClick={() => markAsRead(n)}
+                onClick={() => {
+                  // Si es una notificación de solicitud de reserva, navegar a admin
+                  if (n.type === 'booking_requested') {
+                    markAsRead(n)
+                    navigate('/admin')
+                  } else {
+                    // Para otros tipos, solo marcar como leída
+                    markAsRead(n)
+                  }
+                }}
                 className="w-full text-left active:scale-[0.99] transition"
               >
                 <div className="flex items-start justify-between gap-3">
@@ -287,6 +339,18 @@ export default function NotificationsPage() {
           ))}
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={showDeleteAllModal}
+        onClose={() => setShowDeleteAllModal(false)}
+        onConfirm={handleDeleteAll}
+        title="Borrar todas las notificaciones"
+        message={`¿Estás seguro de que deseas borrar todas las notificaciones? Esta acción no se puede deshacer.`}
+        confirmText="Sí, borrar todas"
+        cancelText="Cancelar"
+        loading={deletingAll}
+        confirmButtonClass="bg-red-600 hover:bg-red-700"
+      />
     </div>
   )
 }
