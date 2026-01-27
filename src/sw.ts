@@ -61,16 +61,21 @@ function showNotification(title: string, body: string, data: any = {}) {
     return Promise.reject(new Error('Service worker not registered'))
   }
 
+  // Extraer tag de data si existe, o generar uno único
+  const tag = data.tag || `booking-${data.bookingId || Date.now()}`
+  const notificationData = { ...data }
+  delete notificationData.tag // No incluir tag en los datos de la notificación
+
   const notificationOptions: NotificationOptions = {
     body,
     data: {
-      ...data,
+      ...notificationData,
       // Asegurar que la URL esté en los datos
-      url: data.url || 'https://vertebrastudio.github.io/parking-feb/notifications',
+      url: notificationData.url || 'https://vertebrastudio.github.io/parking-feb/notifications',
     },
     icon: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
     badge: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
-    tag: `booking-${data.bookingId || Date.now()}`,
+    tag, // Tag único para evitar duplicados
     requireInteraction: false,
     // Añadir más opciones para mejor visibilidad
     dir: 'ltr',
@@ -99,53 +104,41 @@ if (isFirebaseConfigured) {
 
     // FCM background message handler
     // IMPORTANTE: Este handler se llama cuando el dispositivo está en background o bloqueado
-    // Incluso si el payload tiene "notification", este handler se ejecuta para que podamos
-    // mostrar la notificación cuando el dispositivo está bloqueado
+    // Con FCM V1 API, si el mensaje tiene "notification", FCM lo muestra automáticamente
+    // Solo debemos mostrar manualmente si NO tiene "notification" o si estamos en background
     onBackgroundMessage(messaging, (payload) => {
       console.log('[SW] 🔔 FCM background message received (onBackgroundMessage):', payload)
       
+      // Con FCM V1 API y webpush.notification, el mensaje llega aquí cuando está en background
+      // Necesitamos extraer la información de webpush.notification o de data
       let title = 'FEB parking'
       let body = 'Tienes una nueva notificación'
       let data: any = {}
+      let tag = 'default'
 
-      // Prioridad 1: Usar notification del payload si existe
+      // Prioridad 1: Usar notification del payload si existe (para compatibilidad)
       if (payload.notification) {
         title = payload.notification.title || title
         body = payload.notification.body || body
+        tag = payload.notification.tag || tag
         console.log('[SW] Using notification from payload.notification')
       }
 
-      // Prioridad 2: Usar data del payload
+      // Prioridad 2: Usar data del payload (FCM V1 con webpush)
       if (payload.data) {
-        // Si hay un campo notification serializado en data, parsearlo
-        if (payload.data.notification && typeof payload.data.notification === 'string') {
-          try {
-            const notifData = JSON.parse(payload.data.notification)
-            title = notifData.title || payload.data.title || title
-            body = notifData.body || payload.data.body || body
-            console.log('[SW] Using notification from payload.data.notification (parsed)')
-          } catch {
-            title = payload.data.title || title
-            body = payload.data.body || body
-            console.log('[SW] Using notification from payload.data (fallback)')
-          }
-        } else {
-          // Usar directamente de data
-          title = payload.data.title || payload.notification?.title || title
-          body = payload.data.body || payload.notification?.body || body
-          console.log('[SW] Using notification from payload.data')
-        }
-        
-        // Copiar todos los datos excepto notification (ya procesado)
+        title = payload.data.title || title
+        body = payload.data.body || body
+        tag = payload.data.bookingId ? `booking-${payload.data.bookingId}` : tag
         data = { ...payload.data }
-        delete data.notification
+        delete data.title
+        delete data.body
+        console.log('[SW] Using notification from payload.data')
       }
 
-      console.log('[SW] 📤 About to show notification via onBackgroundMessage:', { title, body, data })
+      console.log('[SW] 📤 Showing notification via onBackgroundMessage:', { title, body, tag, data })
       
-      // SIEMPRE mostrar la notificación, incluso si FCM ya la mostró automáticamente
-      // Esto asegura que funcione cuando el dispositivo está bloqueado
-      showNotification(title, body, data)
+      // Usar el tag para evitar duplicados
+      showNotification(title, body, { ...data, tag })
         .catch((err) => {
           console.error('[SW] ❌ Failed to show notification in onBackgroundMessage:', err)
         })

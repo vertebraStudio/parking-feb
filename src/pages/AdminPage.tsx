@@ -527,23 +527,8 @@ export default function AdminPage() {
         .single()
 
       if (!bookingError && booking) {
-        // Insertar notificación directamente (admin tiene permiso por RLS)
-        const { error: notifError } = await supabase
-          .from('notifications')
-          .insert({
-            user_id: booking.user_id,
-            type: 'booking_confirmed',
-            title: '✅ Reserva confirmada',
-            body: `Tu reserva para el día ${booking.date} ha sido confirmada.`,
-            data: { bookingId: booking.id, date: booking.date },
-          })
-
-        if (notifError) {
-          console.error('Error inserting notification:', notifError)
-        } else {
-          console.log('Notification created successfully')
-        }
-
+        // La Edge Function se encarga de crear la notificación in-app y enviar push
+        // No necesitamos crear la notificación aquí para evitar duplicados
         // Intentar enviar push vía Edge Function (no bloquea si falla)
         try {
           console.log('Calling Edge Function notify-booking-confirmed with bookingId:', bookingId)

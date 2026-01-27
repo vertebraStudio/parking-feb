@@ -101,13 +101,14 @@ async function sendFCMV1Notification(
 ): Promise<any> {
   const url = `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`
   
+  // Para web, usar solo webpush.notification para evitar duplicados
+  // El campo notification de nivel superior puede causar que FCM muestre automáticamente
+  // y también que onBackgroundMessage lo procese, resultando en notificaciones duplicadas
   const message = {
     message: {
       token: token,
-      notification: {
-        title,
-        body,
-      },
+      // NO incluir notification de nivel superior para web
+      // Solo usar webpush.notification para que el service worker tenga control total
       data: {
         ...Object.fromEntries(
           Object.entries(data).map(([k, v]) => [k, String(v)])
@@ -119,6 +120,7 @@ async function sendFCMV1Notification(
           body,
           icon: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
           badge: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
+          tag: `booking-${data.bookingId}`, // Tag único para evitar duplicados
         },
         fcm_options: {
           link: 'https://vertebrastudio.github.io/parking-feb/notifications',
@@ -126,6 +128,11 @@ async function sendFCMV1Notification(
       },
       android: {
         priority: 'high',
+        notification: {
+          title,
+          body,
+          sound: 'default',
+        },
       },
       apns: {
         headers: {
@@ -133,6 +140,10 @@ async function sendFCMV1Notification(
         },
         payload: {
           aps: {
+            alert: {
+              title,
+              body,
+            },
             sound: 'default',
             'content-available': 1,
           },
