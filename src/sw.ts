@@ -150,10 +150,27 @@ if (isFirebaseConfigured) {
 
 // Standard Web Push event listener (fallback for when FCM doesn't work)
 // IMPORTANTE: Este es el listener principal para iOS, ya que FCM puede no funcionar en iOS
+// NOTA: Con FCM V1 API y webpush.notification, este listener NO debería procesar mensajes FCM
+// porque FCM usa onBackgroundMessage. Solo procesamos si NO es un mensaje FCM.
 self.addEventListener('push', (event: PushEvent) => {
   console.log('[SW] 🔔 Push event received (Web Push standard):', event)
   console.log('[SW] Event has data:', !!event.data)
   console.log('[SW] Event type:', event.type)
+
+  // Si el mensaje viene de FCM (tiene estructura FCM), ignorarlo
+  // FCM procesará el mensaje vía onBackgroundMessage
+  if (event.data) {
+    try {
+      const payload = event.data.json()
+      // Si tiene estructura FCM (con fcmMessageId o de Firebase), ignorar
+      if (payload.fcmMessageId || payload.from || payload['google.c.fid']) {
+        console.log('[SW] ⚠️ FCM message detected in push listener - ignoring (will be handled by onBackgroundMessage)')
+        return
+      }
+    } catch {
+      // Si no se puede parsear, continuar procesando
+    }
+  }
 
   let title = 'FEB parking'
   let body = 'Tienes una nueva notificación'
