@@ -6,3 +6,8 @@
 # Esto permite que se llame sin autenticación (útil cuando Supabase bloquea las llamadas)
 # NOTA: La función usa SERVICE_ROLE_KEY internamente, así que es segura
 verify_jwt = false
+
+[functions.notify-booking-requested]
+# También desactivamos la verificación JWT para esta función
+# La función usa SERVICE_ROLE_KEY y solo crea notificaciones / envía push
+verify_jwt = false

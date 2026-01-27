@@ -788,7 +788,7 @@ export default function MapPage() {
       // Todas las solicitudes van automáticamente a lista de espera
       // El admin gestionará la lista y decidirá si hay espacio disponible
       // Crear reserva sin spot_id (null) - automáticamente en lista de espera
-      const { error: bookingError } = await supabase
+      const { data: newBooking, error: bookingError } = await supabase
         .from('bookings')
         .insert({
           user_id: user.id,
@@ -812,6 +812,63 @@ export default function MapPage() {
           return
         }
         throw bookingError
+      }
+
+      console.log('✅ Booking created successfully:', newBooking)
+      console.log('📋 Booking ID:', newBooking?.id, 'Type:', typeof newBooking?.id)
+
+      // Lanzar notificación para administradores (in-app + push) de nueva solicitud
+      if (newBooking?.id) {
+        console.log('🚀 About to call Edge Function notify-booking-requested')
+        console.log('📦 Payload:', { bookingId: newBooking.id })
+        
+        try {
+          console.log('🚀 Calling Edge Function notify-booking-requested with bookingId:', newBooking.id)
+          
+          const functionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/notify-booking-requested`
+          console.log('🔗 Function URL:', functionUrl)
+          
+          // Asegurar que bookingId sea un número (la Edge Function lo espera como number)
+          const bookingId = typeof newBooking.id === 'number' ? newBooking.id : parseInt(String(newBooking.id), 10)
+          
+          if (isNaN(bookingId)) {
+            console.error('❌ Invalid bookingId:', newBooking.id, 'cannot be converted to number')
+            return
+          }
+          
+          console.log('📤 Invoking function with bookingId (number):', bookingId, 'Type:', typeof bookingId)
+          
+          const { data, error } = await supabase.functions.invoke('notify-booking-requested', {
+            body: { bookingId },
+          })
+          
+          console.log('📥 Function response received:', { data, error })
+          
+          if (error) {
+            console.error('❌ notify-booking-requested error:', error)
+            console.error('Error details:', {
+              message: error.message,
+              name: error.name,
+              status: error.status,
+            })
+          } else {
+            console.log('✅ notify-booking-requested response:', data)
+            if (data?.pushed === 0) {
+              console.warn('⚠️ No push tokens found for admins or FIREBASE_SERVICE_ACCOUNT_JSON not set')
+            }
+          }
+        } catch (fnErr: any) {
+          console.error('❌ notify-booking-requested failed (non-blocking):', fnErr)
+          console.error('Exception details:', {
+            message: fnErr.message,
+            cause: fnErr.cause,
+            stack: fnErr.stack,
+          })
+        }
+      } else {
+        console.error('⚠️ No booking ID returned after insert!')
+        console.error('newBooking object:', newBooking)
+        console.error('newBooking?.id:', newBooking?.id)
       }
 
       // Recargar reservas

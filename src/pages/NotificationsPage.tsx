@@ -26,15 +26,26 @@ export default function NotificationsPage() {
         return
       }
 
+      console.log('🔍 Loading notifications for user:', auth.user.id)
+      
       const { data, error: nError } = await supabase
         .from('notifications')
         .select('*')
+        .eq('user_id', auth.user.id) // Filtrar explícitamente por user_id
         .order('created_at', { ascending: false })
         .limit(50)
 
-      if (nError) throw nError
+      if (nError) {
+        console.error('❌ Error loading notifications:', nError)
+        throw nError
+      }
+      
+      console.log('✅ Notifications loaded:', data?.length || 0, 'items')
+      console.log('📋 Notifications data:', data)
+      
       setItems((data || []) as AppNotification[])
     } catch (e: any) {
+      console.error('❌ Error in loadNotifications:', e)
       setError(e.message || 'Error cargando notificaciones')
     } finally {
       setLoading(false)
@@ -172,6 +183,11 @@ export default function NotificationsPage() {
             <p className="text-gray-600 text-sm">
               {unreadCount > 0 ? `${unreadCount} sin leer` : 'Todo al día'}
             </p>
+            {process.env.NODE_ENV === 'development' && (
+              <p className="text-xs text-gray-400 mt-1">
+                Items: {items.length} | Loading: {loading ? 'Sí' : 'No'}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-3">
