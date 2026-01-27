@@ -103,28 +103,31 @@ if (isFirebaseConfigured) {
     console.log('[SW] ✅ Firebase FCM initialized')
 
     // FCM background message handler
-    // IMPORTANTE: Este handler se llama cuando el dispositivo está en background o bloqueado
-    // Con FCM V1 API, si el mensaje tiene "notification", FCM lo muestra automáticamente
-    // Solo debemos mostrar manualmente si NO tiene "notification" o si estamos en background
+    // IMPORTANTE: Con FCM V1 API y webpush.notification, FCM muestra automáticamente la notificación
+    // cuando el mensaje tiene webpush.notification. Si intentamos mostrarla manualmente también,
+    // resultará en notificaciones duplicadas.
+    // SOLUCIÓN: NO mostrar manualmente cuando el mensaje tiene webpush.notification
     onBackgroundMessage(messaging, (payload) => {
       console.log('[SW] 🔔 FCM background message received (onBackgroundMessage):', payload)
       
-      // Con FCM V1 API y webpush.notification, el mensaje llega aquí cuando está en background
-      // Necesitamos extraer la información de webpush.notification o de data
+      // Con FCM V1 API, si el mensaje tiene webpush.notification, FCM ya lo muestra automáticamente
+      // Solo debemos procesar manualmente mensajes "data-only" (sin notification)
+      // Verificar si el payload tiene estructura de webpush.notification
+      const hasWebPushNotification = payload.fcmOptions?.link || payload.data?.url
+      
+      if (hasWebPushNotification && payload.data) {
+        // Este es un mensaje con webpush.notification - FCM ya lo mostrará automáticamente
+        console.log('[SW] ⚠️ Message has webpush.notification - FCM will show automatically, skipping manual display')
+        console.log('[SW] Data available for app:', payload.data)
+        return
+      }
+      
+      // Solo mostrar manualmente si es un mensaje "data-only" sin notification
       let title = 'FEB parking'
       let body = 'Tienes una nueva notificación'
       let data: any = {}
       let tag = 'default'
 
-      // Prioridad 1: Usar notification del payload si existe (para compatibilidad)
-      if (payload.notification) {
-        title = payload.notification.title || title
-        body = payload.notification.body || body
-        tag = payload.notification.tag || tag
-        console.log('[SW] Using notification from payload.notification')
-      }
-
-      // Prioridad 2: Usar data del payload (FCM V1 con webpush)
       if (payload.data) {
         title = payload.data.title || title
         body = payload.data.body || body
@@ -132,16 +135,15 @@ if (isFirebaseConfigured) {
         data = { ...payload.data }
         delete data.title
         delete data.body
-        console.log('[SW] Using notification from payload.data')
+        console.log('[SW] 📤 Showing notification manually (data-only message):', { title, body, tag })
+        
+        showNotification(title, body, { ...data, tag })
+          .catch((err) => {
+            console.error('[SW] ❌ Failed to show notification in onBackgroundMessage:', err)
+          })
+      } else {
+        console.log('[SW] ⚠️ No data in payload, nothing to show')
       }
-
-      console.log('[SW] 📤 Showing notification via onBackgroundMessage:', { title, body, tag, data })
-      
-      // Usar el tag para evitar duplicados
-      showNotification(title, body, { ...data, tag })
-        .catch((err) => {
-          console.error('[SW] ❌ Failed to show notification in onBackgroundMessage:', err)
-        })
     })
   } catch (err) {
     console.error('[SW] Error initializing Firebase:', err)
