@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import { format, addDays, subDays, isBefore, startOfDay, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
 import ParkingMap from '../components/ParkingMap'
@@ -9,6 +9,7 @@ import DayBookingsList from '../components/DayBookingsList'
 import ConfirmModal from '../components/ui/ConfirmModal'
 import { ParkingSpot, Booking, Profile, SpotBlock } from '../types'
 import { supabase } from '../lib/supabase'
+import { usePullToRefresh } from '../hooks/usePullToRefresh'
 
 export default function MapPage() {
   const navigate = useNavigate()
@@ -1171,6 +1172,20 @@ export default function MapPage() {
   //   return booking.status === 'confirmed' ? 'confirmed' : 'pending'
   // }
 
+  // Función para refrescar los datos (pull-to-refresh)
+  const handleRefresh = async () => {
+    await Promise.all([
+      loadWeekBookings(),
+      loadUserBookings(),
+    ])
+  }
+
+  // Hook para pull-to-refresh
+  const { containerRef, isRefreshing, pullDistance, pullProgress } = usePullToRefresh({
+    onRefresh: handleRefresh,
+    enabled: !loading,
+  })
+
   // const getFreeSpotsCount = (): number => {
   //   const date = selectedDate
   //   let freeCount = 0
@@ -1212,11 +1227,29 @@ export default function MapPage() {
 
   return (
     <div 
+      ref={containerRef}
       className="p-4 min-h-screen bg-white"
       style={{
         minHeight: '100vh'
       }}
     >
+      {/* Indicador de pull-to-refresh */}
+      {(pullDistance > 0 || isRefreshing) && (
+        <div
+          className="fixed top-0 left-0 right-0 flex items-center justify-center z-50 transition-transform duration-200 pointer-events-none"
+          style={{
+            transform: `translateY(${Math.max(0, pullDistance - 20)}px)`,
+            opacity: Math.min(1, pullProgress),
+          }}
+        >
+          <div className="bg-white rounded-full p-3 shadow-lg border border-gray-200">
+            <RefreshCw
+              className={`w-6 h-6 text-orange-500 ${isRefreshing ? 'animate-spin' : ''}`}
+              strokeWidth={2.5}
+            />
+          </div>
+        </div>
+      )}
       {/* Título */}
       <div className="mb-4">
         <h1 

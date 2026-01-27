@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Calendar, Car, X, CheckCircle, Clock, ChevronLeft, ChevronRight, Users, Edit2, UserPlus } from 'lucide-react'
+import { Calendar, Car, X, CheckCircle, Clock, ChevronLeft, ChevronRight, Users, Edit2, UserPlus, RefreshCw } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Booking, Profile, ParkingSpot } from '../types'
 import ConfirmModal from '../components/ui/ConfirmModal'
 import BookingModal from '../components/ui/BookingModal'
 import { format, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
+// import { usePullToRefresh } from '../hooks/usePullToRefresh' // Temporalmente deshabilitado
 
 interface BookingWithSpot extends Booking {
   spot?: ParkingSpot
@@ -43,7 +44,14 @@ export default function BookingsPage() {
 
   useEffect(() => {
     if (user) {
-      loadBookings()
+      loadBookings().catch((error) => {
+        console.error('Error in loadBookings useEffect:', error)
+        setLoading(false)
+        setError('Error al cargar las reservas')
+      })
+    } else {
+      // Si no hay usuario, asegurarse de que loading sea false
+      setLoading(false)
     }
   }, [user, selectedWeekMonday])
 
@@ -52,6 +60,7 @@ export default function BookingsPage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session || !session.user) {
         setUser(null)
+        setLoading(false)
         return
       }
 
@@ -63,12 +72,14 @@ export default function BookingsPage() {
 
       if (profileError) {
         console.error('Error loading profile:', profileError)
+        setLoading(false)
         return
       }
 
       setUser(profile)
     } catch (error) {
       console.error('Error loading user:', error)
+      setLoading(false)
     }
   }
 
@@ -103,6 +114,7 @@ export default function BookingsPage() {
         console.error('Error loading bookings:', bookingsError)
         setError('Error al cargar las reservas')
         setBookings([])
+        setLoading(false)
         return
       }
 
@@ -459,6 +471,23 @@ export default function BookingsPage() {
     }
   }
 
+  // Hook para pull-to-refresh - temporalmente deshabilitado para debugging
+  const containerRef = useRef<HTMLDivElement>(null)
+  const isRefreshing = false
+  const pullDistance = 0
+  const pullProgress = 0
+  
+  // Comentado temporalmente para debugging
+  // const handleRefresh = useCallback(async () => {
+  //   if (user) {
+  //     await loadBookings()
+  //   }
+  // }, [user])
+  // const { containerRef, isRefreshing, pullDistance, pullProgress } = usePullToRefresh({
+  //   onRefresh: handleRefresh,
+  //   enabled: !loading && !!user,
+  // })
+
   if (loading) {
     return (
       <div 
@@ -485,8 +514,26 @@ export default function BookingsPage() {
 
   return (
     <div 
+      ref={containerRef}
       className="p-4 pb-24 min-h-screen bg-white"
     >
+      {/* Indicador de pull-to-refresh */}
+      {(pullDistance > 0 || isRefreshing) && (
+        <div
+          className="fixed top-0 left-0 right-0 flex items-center justify-center z-50 transition-transform duration-200 pointer-events-none"
+          style={{
+            transform: `translateY(${Math.max(0, pullDistance - 20)}px)`,
+            opacity: Math.min(1, pullProgress),
+          }}
+        >
+          <div className="bg-white rounded-full p-3 shadow-lg border border-gray-200">
+            <RefreshCw
+              className={`w-6 h-6 text-orange-500 ${isRefreshing ? 'animate-spin' : ''}`}
+              strokeWidth={2.5}
+            />
+          </div>
+        </div>
+      )}
       <h1 
         className="text-3xl font-semibold mb-6 text-gray-900 tracking-tight"
         style={{ 
