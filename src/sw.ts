@@ -233,31 +233,103 @@ self.addEventListener('push', (event: PushEvent) => {
   }
 
   console.log('[SW] 📤 About to show notification:', { title, body, data })
-  event.waitUntil(showNotification(title, body, data))
+  
+  // Actualizar el badge del icono de la aplicación cuando se recibe una notificación
+  event.waitUntil(
+    Promise.all([
+      showNotification(title, body, data),
+      updateAppBadgeInSW()
+    ])
+  )
 })
+
+// Función para actualizar el badge en el Service Worker
+async function updateAppBadgeInSW() {
+  try {
+    // En el Service Worker, la Badging API está disponible en navigator
+    if ('setAppBadge' in navigator && typeof (navigator as any).setAppBadge === 'function') {
+      // Obtener el badge actual (si existe) e incrementarlo
+      // Nota: No podemos leer el badge actual directamente, así que usamos un contador en storage
+      const currentBadge = await getBadgeCount()
+      const newBadge = currentBadge + 1
+      await (navigator as any).setAppBadge(newBadge)
+      await setBadgeCount(newBadge)
+      console.log('[SW] ✅ App badge actualizado en SW:', newBadge)
+    }
+  } catch (error) {
+    console.error('[SW] Error actualizando app badge:', error)
+  }
+}
+
+// Funciones auxiliares para mantener el conteo del badge en el Service Worker
+async function getBadgeCount(): Promise<number> {
+  try {
+    const cache = await caches.open('badge-cache')
+    const response = await cache.match('badge-count')
+    if (response) {
+      const text = await response.text()
+      return parseInt(text, 10) || 0
+    }
+    return 0
+  } catch {
+    return 0
+  }
+}
+
+async function setBadgeCount(count: number): Promise<void> {
+  try {
+    const cache = await caches.open('badge-cache')
+    await cache.put('badge-count', new Response(count.toString()))
+  } catch (error) {
+    console.error('[SW] Error guardando badge count:', error)
+  }
+}
+
+// Función para decrementar el badge cuando se hace clic en una notificación
+async function decrementAppBadge() {
+  try {
+    if ('setAppBadge' in navigator && typeof (navigator as any).setAppBadge === 'function') {
+      const currentBadge = await getBadgeCount()
+      const newBadge = Math.max(0, currentBadge - 1)
+      if (newBadge > 0) {
+        await (navigator as any).setAppBadge(newBadge)
+      } else {
+        await (navigator as any).clearAppBadge()
+      }
+      await setBadgeCount(newBadge)
+      console.log('[SW] ✅ App badge decrementado:', newBadge)
+    }
+  } catch (error) {
+    console.error('[SW] Error decrementando app badge:', error)
+  }
+}
 
 // Handle notification clicks
 self.addEventListener('notificationclick', (event: NotificationEvent) => {
   console.log('[SW] Notification clicked:', event)
   
   event.notification.close()
-
+  
+  // Decrementar el badge cuando el usuario hace clic en una notificación
   const data = event.notification.data || {}
   const urlToOpen = data.url || '/parking-feb/notifications'
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // Check if there's already a window/tab open with the target URL
-      for (const client of clientList) {
-        if (client.url === urlToOpen && 'focus' in client) {
-          return client.focus()
+    Promise.all([
+      decrementAppBadge(),
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+        // Check if there's already a window/tab open with the target URL
+        for (const client of clientList) {
+          if (client.url === urlToOpen && 'focus' in client) {
+            return client.focus()
+          }
         }
-      }
-      // If not, open a new window/tab
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(urlToOpen)
-      }
-    })
+        // If not, open a new window/tab
+        if (self.clients.openWindow) {
+          return self.clients.openWindow(urlToOpen)
+        }
+      })
+    ])
   )
 })
 

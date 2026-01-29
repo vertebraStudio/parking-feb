@@ -5,6 +5,26 @@ import { cn } from '../lib/utils'
 import { supabase } from '../lib/supabase'
 import { Profile } from '../types'
 
+// Función para actualizar el badge del icono de la aplicación
+const updateAppBadge = async (count: number) => {
+  try {
+    // Verificar si la Badging API está disponible
+    if ('setAppBadge' in navigator && typeof (navigator as any).setAppBadge === 'function') {
+      if (count > 0) {
+        await (navigator as any).setAppBadge(count)
+        console.log('✅ App badge actualizado:', count)
+      } else {
+        await (navigator as any).clearAppBadge()
+        console.log('✅ App badge limpiado')
+      }
+    } else {
+      console.log('⚠️ Badging API no disponible en este navegador')
+    }
+  } catch (error) {
+    console.error('Error actualizando app badge:', error)
+  }
+}
+
 export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -32,10 +52,11 @@ export default function Layout() {
       return () => {
         if (unsubscribe) unsubscribe()
       }
-    } else {
-      // Si no hay perfil, resetear el conteo
-      setUnreadCount(0)
-    }
+      } else {
+        // Si no hay perfil, resetear el conteo y limpiar el badge
+        setUnreadCount(0)
+        updateAppBadge(0)
+      }
   }, [userProfile])
 
   // Escuchar cambios de autenticación
@@ -47,6 +68,7 @@ export default function Layout() {
       } else {
         setUnreadCount(0)
         setUserProfile(null)
+        updateAppBadge(0)
       }
     })
 
@@ -128,6 +150,7 @@ export default function Layout() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session || !session.user) {
         setUnreadCount(0)
+        await updateAppBadge(0)
         return
       }
 
@@ -142,15 +165,20 @@ export default function Layout() {
       if (error) {
         console.error('Error loading unread count:', error)
         setUnreadCount(0)
+        await updateAppBadge(0)
         return
       }
 
       const newCount = data?.length || 0
       console.log('🔔 Unread notifications count:', newCount, 'notifications:', data?.map(n => n.id))
       setUnreadCount(newCount)
+      
+      // Actualizar el badge del icono de la aplicación
+      await updateAppBadge(newCount)
     } catch (error) {
       console.error('Error loading unread count:', error)
       setUnreadCount(0)
+      await updateAppBadge(0)
     }
   }
 
