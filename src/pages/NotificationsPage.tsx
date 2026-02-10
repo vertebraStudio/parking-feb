@@ -230,7 +230,7 @@ export default function NotificationsPage() {
             <p className="text-gray-600 text-sm">
               {unreadCount > 0 ? `${unreadCount} sin leer` : 'Todo al día'}
             </p>
-            {process.env.NODE_ENV === 'development' && (
+            {import.meta.env.DEV && (
               <p className="text-xs text-gray-400 mt-1">
                 Items: {items.length} | Loading: {loading ? 'Sí' : 'No'}
               </p>
