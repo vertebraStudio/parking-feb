@@ -244,14 +244,97 @@ export default function Layout() {
   })
 
   return (
-    <div className="max-w-md mx-auto min-h-screen">
-      <main className="flex-1 pb-20">
-        <Outlet />
-      </main>
-      
-      {/* Bottom Navigation - iOS Style with Blur */}
+    <div className="min-h-screen lg:flex">
+      {/* Desktop Sidebar Navigation - only visible on lg+ */}
+      <aside
+        className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 border-r border-gray-200"
+        style={{
+          backgroundColor: 'rgba(255, 255, 255, 0.95)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+        }}
+      >
+        {/* Sidebar Header */}
+        <div className="p-6 pb-4 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <img src={`${import.meta.env.BASE_URL}pwa-192x192.png`} alt="FEB Parking" className="w-9 h-9 rounded-[10px] shadow-sm" />
+            <div className="min-w-0">
+              <h1
+                className="text-xl font-bold text-gray-900 tracking-tight"
+                style={{
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
+                  letterSpacing: '-0.3px',
+                }}
+              >
+                FEB Parking
+              </h1>
+              {userProfile && (
+                <p className="text-sm text-gray-500 truncate">
+                  {userProfile.full_name || userProfile.email}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Sidebar Nav Items */}
+        <nav className="flex-1 py-4 px-3 space-y-1">
+          {navItems.map((item) => {
+            const Icon = item.icon
+            const isActive = location.pathname === item.path
+            const showBadge = item.path === '/notifications' && unreadCount > 0
+
+            return (
+              <button
+                key={item.path}
+                onClick={() => navigate(item.path)}
+                className={cn(
+                  'w-full flex items-center gap-3 px-4 py-3 rounded-[14px] text-left transition-all duration-200',
+                  isActive
+                    ? 'text-white font-semibold'
+                    : 'text-gray-600 hover:bg-gray-100 font-medium'
+                )}
+                style={isActive ? {
+                  backgroundColor: '#FF9500',
+                  boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)',
+                } : {}}
+              >
+                <div className="relative">
+                  <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
+                  {showBadge && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full"
+                      style={{
+                        backgroundColor: isActive ? '#fff' : '#FF9500',
+                        boxShadow: isActive ? '0 2px 4px rgba(0,0,0,0.2)' : '0 2px 4px rgba(255, 149, 0, 0.4)',
+                      }}
+                    />
+                  )}
+                </div>
+                <span className="text-sm">{item.label}</span>
+              </button>
+            )
+          })}
+        </nav>
+
+        {/* Sidebar Footer */}
+        <div className="p-4 border-t border-gray-100">
+          <p className="text-xs text-gray-400 text-center">FEB Parking v1.0</p>
+        </div>
+      </aside>
+
+      {/* Main content area */}
+      <div className="flex-1 lg:ml-64">
+        <div className="max-w-md mx-auto lg:max-w-5xl lg:mx-auto">
+          <main className="flex-1 pb-20 lg:pb-8 lg:px-6 lg:pt-4">
+            <Outlet />
+          </main>
+        </div>
+      </div>
+
+      {/* Bottom Navigation - Mobile only (hidden on lg+) */}
       <nav 
-        className="fixed bottom-0 left-0 right-0 max-w-md mx-auto border-t border-white/10"
+        className="fixed bottom-0 left-0 right-0 max-w-md mx-auto border-t border-white/10 lg:hidden"
         style={{
           backgroundColor: 'rgba(255, 255, 255, 0.8)',
           backdropFilter: 'blur(20px) saturate(180%)',

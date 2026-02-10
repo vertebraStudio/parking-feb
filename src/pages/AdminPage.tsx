@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3, Eye, EyeOff } from 'lucide-react'
+import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3, Eye, EyeOff, Trash2 } from 'lucide-react'
 import { format, startOfWeek, addDays, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '../lib/supabase'
@@ -10,7 +10,8 @@ import ConfirmModal from '../components/ui/ConfirmModal'
 interface BookingWithSpot extends Booking {
   spot?: ParkingSpot
   user?: Profile
-  carpoolUser?: Profile
+  // Compañeros de coche (pueden ser varios)
+  carpoolUsers?: Profile[]
 }
 
 export default function AdminPage() {
@@ -27,6 +28,13 @@ export default function AdminPage() {
     const today = new Date()
     return startOfWeek(today, { weekStartsOn: 1 })
   })
+  // Estado para gestionar acciones sobre usuarios (aceptar / borrar) en la pestaña de usuarios
+  const [userToVerify, setUserToVerify] = useState<Profile | null>(null)
+  const [userToDelete, setUserToDelete] = useState<Profile | null>(null)
+  const [showVerifyUserModal, setShowVerifyUserModal] = useState(false)
+  const [showDeleteUserModal, setShowDeleteUserModal] = useState(false)
+  const [verifyingUser, setVerifyingUser] = useState(false)
+  const [deletingUser, setDeletingUser] = useState(false)
   const [selectedWeekMonday, setSelectedWeekMonday] = useState<Date>(() => {
     const today = new Date()
     return startOfWeek(today, { weekStartsOn: 1 })
@@ -138,34 +146,64 @@ export default function AdminPage() {
         return
       }
 
-      // Cargar información de usuarios
+      // Cargar información de usuarios (incluyendo compañeros de coche múltiples)
       if (bookingsData && bookingsData.length > 0) {
         const userIds = [...new Set(bookingsData.map(b => b.user_id))]
-        const carpoolUserIds = bookingsData
+
+        const bookingIds = bookingsData.map(b => b.id)
+        const { data: carpoolLinks, error: carpoolLinksError } = await supabase
+          .from('booking_carpool_users')
+          .select('*')
+          .in('booking_id', bookingIds)
+
+        if (carpoolLinksError) {
+          console.error('Error loading booking_carpool_users (summary):', carpoolLinksError)
+        }
+
+        const legacyCarpoolIds = bookingsData
           .map(b => b.carpool_with_user_id)
           .filter((id): id is string => id !== null)
-        const allUserIds = [...new Set([...userIds, ...carpoolUserIds])]
+        const linksUserIds = (carpoolLinks || []).map(link => link.user_id as string)
+        const allCarpoolUserIds = Array.from(new Set([...legacyCarpoolIds, ...linksUserIds]))
+
+        const allUserIds = [...new Set([...userIds, ...allCarpoolUserIds])]
 
         const { data: usersData } = await supabase
           .from('profiles')
           .select('*')
           .in('id', allUserIds)
 
-        let carpoolProfilesMap = new Map<string, Profile>()
-        if (carpoolUserIds.length > 0 && usersData) {
-          usersData.forEach(profile => {
-            if (carpoolUserIds.includes(profile.id)) {
-              carpoolProfilesMap.set(profile.id, profile)
-            }
-          })
-        }
+        const profilesMap = new Map<string, Profile>()
+        usersData?.forEach(p => profilesMap.set(p.id, p))
 
-        const bookingsWithDetails: BookingWithSpot[] = bookingsData.map(booking => ({
-          ...booking,
-          spot: undefined,
-          user: usersData?.find(u => u.id === booking.user_id),
-          carpoolUser: booking.carpool_with_user_id ? carpoolProfilesMap.get(booking.carpool_with_user_id) : undefined
-        }))
+        const bookingsWithDetails: BookingWithSpot[] = bookingsData.map(booking => {
+          const userProfile = profilesMap.get(booking.user_id)
+
+          const linksForBooking = (carpoolLinks || []).filter(link => link.booking_id === booking.id)
+          const usersFromLinks = linksForBooking
+            .map(link => profilesMap.get(link.user_id))
+            .filter((u): u is Profile => !!u)
+
+          const carpoolUsersMap = new Map<string, Profile>()
+          usersFromLinks.forEach(u => carpoolUsersMap.set(u.id, u))
+
+          if (booking.carpool_with_user_id) {
+            const legacyProfile = profilesMap.get(booking.carpool_with_user_id)
+            if (legacyProfile) {
+              carpoolUsersMap.delete(legacyProfile.id)
+              carpoolUsersMap.set(legacyProfile.id, legacyProfile)
+            }
+          }
+
+          const carpoolUsers = Array.from(carpoolUsersMap.values())
+
+          return {
+            ...booking,
+            spot: undefined,
+            user: userProfile,
+            carpoolUsers,
+          }
+        })
 
         // Filtrar reservas de directivos
         const bookingsWithoutDirectivos = bookingsWithDetails.filter(booking => {
@@ -248,6 +286,137 @@ export default function AdminPage() {
     }
   }
 
+  const handleOpenVerifyUser = (profile: Profile) => {
+    setUserToVerify(profile)
+    setShowVerifyUserModal(true)
+  }
+
+  const handleOpenDeleteUser = (profile: Profile) => {
+    setUserToDelete(profile)
+    setShowDeleteUserModal(true)
+  }
+
+  const applyProfileUpdateLocally = (updated: Partial<Profile> & { id: string }) => {
+    setProfiles(prev =>
+      prev.map(p => (p.id === updated.id ? { ...p, ...updated } : p))
+    )
+  }
+
+  const removeProfileLocally = (id: string) => {
+    setProfiles(prev => prev.filter(p => p.id !== id))
+  }
+
+  const confirmVerifyUser = async () => {
+    if (!userToVerify) return
+
+    setVerifyingUser(true)
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ is_verified: true })
+        .eq('id', userToVerify.id)
+
+      if (error) throw error
+
+      applyProfileUpdateLocally({ id: userToVerify.id, is_verified: true })
+      setShowVerifyUserModal(false)
+      setUserToVerify(null)
+    } catch (err: any) {
+      console.error('Error verifying user (AdminPage):', err)
+      alert(`Error al aceptar el usuario: ${err.message || 'Error desconocido'}`)
+    } finally {
+      setVerifyingUser(false)
+    }
+  }
+
+  const confirmDeleteUser = async () => {
+    if (!userToDelete) return
+
+    setDeletingUser(true)
+    try {
+      const targetId = userToDelete.id
+
+      // 1) Intentar borrar completamente usando la Edge Function (auth.users + datos públicos).
+      //    Si falla por CORS / red, continuaremos con un borrado local de tablas públicas.
+      try {
+        const result = await supabase.functions.invoke('delete-user-completely', {
+          body: { userId: targetId },
+        })
+        console.log('delete-user-completely via invoke result:', { data: result.data, error: result.error })
+      } catch (invokeErr: any) {
+        console.warn('⚠️ Error llamando a delete-user-completely, se continuará con borrado local:', invokeErr)
+      }
+
+      // 2) Borrado local en tablas públicas como respaldo (no depende de la Edge Function)
+      try {
+        const { error: bookingsError } = await supabase
+          .from('bookings')
+          .delete()
+          .eq('user_id', targetId)
+        if (bookingsError) {
+          console.error('Error deleting user bookings (AdminPage, fallback):', bookingsError)
+        }
+
+        const { error: carpoolError } = await supabase
+          .from('booking_carpool_users')
+          .delete()
+          .eq('user_id', targetId)
+        if (carpoolError) {
+          console.error('Error deleting booking_carpool_users (AdminPage, fallback):', carpoolError)
+        }
+
+        const { error: notificationsError } = await supabase
+          .from('notifications')
+          .delete()
+          .eq('user_id', targetId)
+        if (notificationsError) {
+          console.error('Error deleting user notifications (AdminPage, fallback):', notificationsError)
+        }
+
+        const { error: pushTokensError } = await supabase
+          .from('push_tokens')
+          .delete()
+          .eq('user_id', targetId)
+        if (pushTokensError) {
+          console.error('Error deleting user push tokens (AdminPage, fallback):', pushTokensError)
+        }
+
+        const { error: spotsError } = await supabase
+          .from('parking_spots')
+          .update({ assigned_to: null, is_released: false })
+          .eq('assigned_to', targetId)
+        if (spotsError) {
+          console.error('Error clearing executive spots for user (AdminPage, fallback):', spotsError)
+        }
+
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .delete()
+          .eq('id', targetId)
+
+        if (profileError) {
+          console.error('Error deleting user profile (AdminPage, fallback):', profileError)
+          alert('No se ha podido eliminar el usuario. Revisa la consola para más detalles.')
+          return
+        }
+      } catch (fallbackErr: any) {
+        console.error('❌ Error en el borrado local de datos del usuario (AdminPage):', fallbackErr)
+        alert('No se ha podido eliminar el usuario. Revisa la consola para más detalles.')
+        return
+      }
+
+      // 3) Actualizar estado local
+      removeProfileLocally(targetId)
+      setShowDeleteUserModal(false)
+      setUserToDelete(null)
+    } catch (err: any) {
+      console.error('Error deleting user (AdminPage):', err)
+      alert(`Error al eliminar el usuario: ${err.message || 'Error desconocido'}`)
+    } finally {
+      setDeletingUser(false)
+    }
+  }
+
   const loadSpots = async () => {
     try {
       // Solo cargar las 8 plazas normales (excluir plazas de directivos)
@@ -322,17 +491,30 @@ export default function AdminPage() {
           console.error('Error loading users:', usersResult.error)
         }
 
-        // Cargar perfiles de usuarios con los que van en coche
-        const carpoolUserIds = bookingsData
+        // Cargar relaciones de carpool múltiple para las reservas
+        const bookingIds = bookingsData.map(b => b.id)
+        const { data: carpoolLinks, error: carpoolLinksError } = await supabase
+          .from('booking_carpool_users')
+          .select('*')
+          .in('booking_id', bookingIds)
+
+        if (carpoolLinksError) {
+          console.error('Error loading booking_carpool_users (bookings tab):', carpoolLinksError)
+        }
+
+        const legacyCarpoolIds = bookingsData
           .map(b => b.carpool_with_user_id)
           .filter((id): id is string => id !== null)
+
+        const linksUserIds = (carpoolLinks || []).map(link => link.user_id as string)
+        const allCarpoolUserIds = Array.from(new Set([...legacyCarpoolIds, ...linksUserIds]))
         
         let carpoolProfilesMap = new Map<string, Profile>()
-        if (carpoolUserIds.length > 0) {
+        if (allCarpoolUserIds.length > 0) {
           const { data: carpoolProfilesData } = await supabase
             .from('profiles')
             .select('*')
-            .in('id', carpoolUserIds)
+            .in('id', allCarpoolUserIds)
           
           if (carpoolProfilesData) {
             carpoolProfilesData.forEach(profile => {
@@ -341,12 +523,35 @@ export default function AdminPage() {
           }
         }
 
-        const bookingsWithDetails: BookingWithSpot[] = bookingsData.map(booking => ({
-          ...booking,
-          spot: spotsResult.data?.find(s => s.id === booking.spot_id),
-          user: usersResult.data?.find(u => u.id === booking.user_id),
-          carpoolUser: booking.carpool_with_user_id ? carpoolProfilesMap.get(booking.carpool_with_user_id) : undefined
-        }))
+        const bookingsWithDetails: BookingWithSpot[] = bookingsData.map(booking => {
+          const spot = spotsResult.data?.find(s => s.id === booking.spot_id)
+          const userProfile = usersResult.data?.find(u => u.id === booking.user_id)
+
+          const linksForBooking = (carpoolLinks || []).filter(link => link.booking_id === booking.id)
+          const usersFromLinks = linksForBooking
+            .map(link => carpoolProfilesMap.get(link.user_id))
+            .filter((u): u is Profile => !!u)
+
+          const carpoolUsersMap = new Map<string, Profile>()
+          usersFromLinks.forEach(u => carpoolUsersMap.set(u.id, u))
+
+          if (booking.carpool_with_user_id) {
+            const legacyProfile = carpoolProfilesMap.get(booking.carpool_with_user_id)
+            if (legacyProfile) {
+              carpoolUsersMap.delete(legacyProfile.id)
+              carpoolUsersMap.set(legacyProfile.id, legacyProfile)
+            }
+          }
+
+          const carpoolUsers = Array.from(carpoolUsersMap.values())
+
+          return {
+            ...booking,
+            spot,
+            user: userProfile,
+            carpoolUsers,
+          }
+        })
 
         // Filtrar reservas de directivos (no deben aparecer en el panel de administración)
         const bookingsWithoutDirectivos = bookingsWithDetails.filter(booking => {
@@ -961,17 +1166,40 @@ export default function AdminPage() {
 
   return (
     <div 
-      className="p-4 pb-24 min-h-screen bg-white"
+      className="p-4 lg:p-6 pb-24 lg:pb-8 min-h-screen bg-white"
     >
-      <h1 
-        className="text-3xl font-semibold mb-6 text-gray-900 tracking-tight"
-        style={{ 
-          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-          letterSpacing: '-0.5px'
-        }}
-      >
-        Panel de Administración
-      </h1>
+      {/* Header con título y estadísticas rápidas en desktop */}
+      <div className="lg:flex lg:items-end lg:justify-between mb-6">
+        <h1 
+          className="text-3xl lg:text-4xl font-semibold text-gray-900 tracking-tight"
+          style={{ 
+            fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
+            letterSpacing: '-0.5px'
+          }}
+        >
+          Panel de Administración
+        </h1>
+        {/* Contadores rápidos - solo desktop */}
+        <div className="hidden lg:flex items-center gap-4 mt-3 lg:mt-0">
+          {unverifiedUsers.length > 0 && (
+            <button
+              onClick={() => { setActiveTab('users'); setError(null) }}
+              className="flex items-center gap-2 px-4 py-2 rounded-[14px] border border-orange-200 bg-orange-50 hover:bg-orange-100 transition-colors"
+            >
+              <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ backgroundColor: '#FF9500' }}>
+                {unverifiedUsers.length}
+              </span>
+              <span className="text-sm font-medium text-orange-800">
+                {unverifiedUsers.length === 1 ? 'usuario pendiente' : 'usuarios pendientes'}
+              </span>
+            </button>
+          )}
+          <div className="flex items-center gap-2 px-4 py-2 rounded-[14px] border border-gray-200 bg-gray-50">
+            <Users className="w-4 h-4 text-gray-500" strokeWidth={2} />
+            <span className="text-sm font-medium text-gray-700">{verifiedUsers.length} verificados</span>
+          </div>
+        </div>
+      </div>
 
       {error && (
         <div 
@@ -986,9 +1214,9 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Tabs - iOS Style */}
+      {/* Tabs - iOS Style (mobile) / Larger tabs (desktop) */}
       <div 
-        className="flex gap-1.5 mb-6 rounded-[20px] p-1.5 border border-gray-200 bg-gray-50 overflow-x-auto"
+        className="flex gap-1.5 mb-6 rounded-[20px] p-1.5 border border-gray-200 bg-gray-50 overflow-x-auto lg:gap-2 lg:p-2"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
         <button
@@ -996,10 +1224,10 @@ export default function AdminPage() {
             setActiveTab('bookings')
             setError(null)
           }}
-          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
             activeTab === 'bookings'
               ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900'
+              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
           }`}
           style={activeTab === 'bookings' ? {
             backgroundColor: '#FF9500',
@@ -1014,10 +1242,10 @@ export default function AdminPage() {
             setActiveTab('spots')
             setError(null)
           }}
-          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
             activeTab === 'spots'
               ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900'
+              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
           }`}
           style={activeTab === 'spots' ? {
             backgroundColor: '#FF9500',
@@ -1032,10 +1260,10 @@ export default function AdminPage() {
             setActiveTab('users')
             setError(null)
           }}
-          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
             activeTab === 'users'
               ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900'
+              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
           }`}
           style={activeTab === 'users' ? {
             backgroundColor: '#FF9500',
@@ -1044,16 +1272,21 @@ export default function AdminPage() {
         >
           <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4 inline mr-1.5" strokeWidth={activeTab === 'users' ? 2.5 : 2} />
           <span className="whitespace-nowrap">Usuarios</span>
+          {unverifiedUsers.length > 0 && (
+            <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold text-white" style={{ backgroundColor: activeTab === 'users' ? 'rgba(255,255,255,0.3)' : '#FF9500' }}>
+              {unverifiedUsers.length}
+            </span>
+          )}
         </button>
         <button
           onClick={() => {
             setActiveTab('summary')
             setError(null)
           }}
-          className={`px-3 py-2 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 ${
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
             activeTab === 'summary'
               ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900'
+              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
           }`}
           style={activeTab === 'summary' ? {
             backgroundColor: '#FF9500',
@@ -1080,33 +1313,48 @@ export default function AdminPage() {
               >
                 Usuarios Pendientes de Verificación ({unverifiedUsers.length})
               </h2>
-              <div className="space-y-3">
-                {unverifiedUsers.map((profile) => (
+              <div className="space-y-3 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:space-y-0">
+                {unverifiedUsers.map((profile) => {
+                  const initials = (profile.full_name || profile.email || '?').charAt(0).toUpperCase()
+                  return (
                   <div
                     key={profile.id}
-                    className="rounded-[20px] p-5 transition-all duration-200 bg-white border border-orange-200"
+                    className="rounded-[20px] p-5 transition-all duration-200 bg-white border border-orange-200 hover:shadow-md"
                   >
-                    <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      {/* Avatar */}
+                      <div className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white" style={{ backgroundColor: '#FF9500' }}>
+                        {initials}
+                      </div>
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-gray-900 mb-1.5">{profile.full_name || 'Sin nombre'}</p>
-                        <p className="text-sm text-gray-600 mb-2">{profile.email}</p>
-                        <p className="text-xs text-gray-500">
+                        <p className="font-semibold text-gray-900 mb-0.5 truncate">{profile.full_name || 'Sin nombre'}</p>
+                        <p className="text-sm text-gray-500 truncate">{profile.email}</p>
+                        <p className="text-xs text-gray-400 mt-1">
                           Registrado: {new Date(profile.created_at).toLocaleDateString('es-ES')}
                         </p>
                       </div>
-                      <div className="flex-shrink-0">
-                        <button
-                          onClick={() => navigate(`/profile/${profile.id}`)}
-                          className="px-3 py-2 text-sm border border-gray-300 text-gray-700 rounded-[14px] font-medium hover:bg-gray-50 transition-colors active:scale-95 flex items-center gap-1.5"
-                          title="Ver perfil"
-                        >
-                          <User className="w-4 h-4" strokeWidth={2} />
-                          Ver Perfil
-                        </button>
-                      </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-orange-100 flex gap-2">
+                      <button
+                        onClick={() => handleOpenVerifyUser(profile)}
+                        className="flex-1 px-3 py-2 text-xs sm:text-sm border border-green-200 text-green-700 rounded-[14px] font-semibold hover:bg-green-50 transition-colors active:scale-95 flex items-center justify-center gap-1.5"
+                        title="Aceptar usuario"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
+                        Aceptar
+                      </button>
+                      <button
+                        onClick={() => handleOpenDeleteUser(profile)}
+                        className="flex-1 px-3 py-2 text-xs sm:text-sm border border-red-200 text-red-600 rounded-[14px] font-semibold hover:bg-red-50 transition-colors active:scale-95 flex items-center justify-center gap-1.5"
+                        title="Eliminar usuario"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" strokeWidth={2.5} />
+                        Borrar
+                      </button>
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
@@ -1122,55 +1370,95 @@ export default function AdminPage() {
             >
               Usuarios Verificados ({verifiedUsers.length})
             </h2>
-            <div className="space-y-2">
-              {verifiedUsers.map((profile) => (
+            <div className="space-y-2 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:space-y-0">
+              {verifiedUsers.map((profile) => {
+                const initials = (profile.full_name || profile.email || '?').charAt(0).toUpperCase()
+                const isAdmin = profile.role === 'admin'
+                return (
                 <div
                   key={profile.id}
-                  className="rounded-[20px] p-4 transition-all duration-200 bg-white border border-gray-200"
+                  onClick={() => navigate(`/profile/${profile.id}`)}
+                  className="rounded-[20px] p-4 transition-all duration-200 bg-white border border-gray-200 hover:shadow-md hover:border-gray-300 cursor-pointer group"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex-1">
+                  <div className="flex items-center gap-3">
+                    {/* Avatar */}
+                    <div
+                      className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white"
+                      style={{ backgroundColor: isAdmin ? '#FF9500' : '#8E8E93' }}
+                    >
+                      {initials}
+                    </div>
+                    <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-semibold text-gray-900">{profile.full_name || 'Sin nombre'}</p>
-                        {profile.role === 'admin' && (
+                        <p className="font-semibold text-gray-900 truncate">{profile.full_name || 'Sin nombre'}</p>
+                        {isAdmin && (
                           <span 
-                            className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
-                            style={{
-                              backgroundColor: '#FF9500',
-                            }}
+                            className="px-2 py-0.5 text-[10px] font-bold text-white rounded-[6px] flex-shrink-0"
+                            style={{ backgroundColor: '#FF9500' }}
                           >
                             ADMIN
                           </span>
                         )}
                         {profile.is_verified && profile.role === 'user' && (
-                          <CheckCircle className="w-4 h-4" style={{ color: '#34C759' }} strokeWidth={2.5} />
+                          <CheckCircle className="w-4 h-4 flex-shrink-0" style={{ color: '#34C759' }} strokeWidth={2.5} />
                         )}
                       </div>
-                      <p className="text-sm text-gray-600">{profile.email}</p>
+                      <p className="text-sm text-gray-500 truncate">{profile.email}</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => navigate(`/profile/${profile.id}`)}
-                        className="px-3 py-1.5 text-sm border border-gray-300 text-gray-700 rounded-[14px] font-medium hover:bg-gray-50 transition-colors active:scale-95 flex items-center gap-1.5"
-                        title="Ver perfil"
-                      >
-                        <User className="w-4 h-4" strokeWidth={2} />
-                        Ver Perfil
-                      </button>
-                    </div>
+                    <ChevronRight className="w-5 h-5 text-gray-300 flex-shrink-0 group-hover:text-gray-500 transition-colors" strokeWidth={2} />
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </div>
       )}
 
+      {/* Modales para aceptar / borrar usuarios (pestaña de usuarios) */}
+      <ConfirmModal
+        isOpen={showVerifyUserModal}
+        onClose={() => {
+          setShowVerifyUserModal(false)
+          setUserToVerify(null)
+        }}
+        onConfirm={confirmVerifyUser}
+        title="Aceptar usuario"
+        message={
+          userToVerify
+            ? `¿Estás seguro de que deseas aceptar y verificar a ${userToVerify.full_name || userToVerify.email}?`
+            : ''
+        }
+        confirmText="Sí, aceptar"
+        cancelText="Cancelar"
+        loading={verifyingUser}
+        confirmButtonClass="bg-green-600 hover:bg-green-700"
+      />
+
+      <ConfirmModal
+        isOpen={showDeleteUserModal}
+        onClose={() => {
+          setShowDeleteUserModal(false)
+          setUserToDelete(null)
+        }}
+        onConfirm={confirmDeleteUser}
+        title="Eliminar usuario"
+        message={
+          userToDelete
+            ? `¿Estás seguro de que deseas eliminar permanentemente a ${userToDelete.full_name || userToDelete.email}? Esta acción no se puede deshacer.`
+            : ''
+        }
+        confirmText="Sí, eliminar"
+        cancelText="Cancelar"
+        loading={deletingUser}
+        confirmButtonClass="bg-red-600 hover:bg-red-700"
+      />
+
       {activeTab === 'spots' && (
-        <div className="space-y-4">
+        <div className="space-y-4 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0">
           {/* Selector de fecha y número de plazas */}
           <div 
-            className="rounded-[20px] p-4 border border-gray-200 bg-gray-50 overflow-hidden"
+            className="rounded-[20px] p-4 border border-gray-200 bg-gray-50 overflow-hidden lg:h-fit"
           >
             <label className="block text-sm font-semibold text-gray-900 mb-3">
               Bloquear plazas
@@ -1256,6 +1544,8 @@ export default function AdminPage() {
             </button>
           </div>
 
+          {/* Estado de bloqueos - columna derecha en desktop */}
+          <div className="space-y-4">
           {/* Estado de carga */}
           {loadingSpotBlocks && (
             <div className="text-center py-4">
@@ -1333,14 +1623,17 @@ export default function AdminPage() {
               )}
             </div>
           )}
+          </div>
         </div>
       )}
 
       {activeTab === 'bookings' && (
         <div className="space-y-4">
+          {/* Controles: selector de semana + filtro por día en la misma fila en desktop */}
+          <div className="lg:grid lg:grid-cols-2 lg:gap-4 space-y-4 lg:space-y-0">
           {/* Selector de semana */}
           <div 
-            className="mb-4 p-4 bg-gray-50 rounded-[20px] border border-gray-200"
+            className="p-4 bg-gray-50 rounded-[20px] border border-gray-200"
           >
             <div className="flex items-center justify-between">
               <button
@@ -1381,10 +1674,9 @@ export default function AdminPage() {
             </div>
           </div>
 
-
-          {/* Switch para mostrar/ocultar reservas confirmadas */}
+          {/* Switch para mostrar/ocultar reservas confirmadas - solo móvil */}
           <div 
-            className="rounded-[20px] p-4 border border-gray-200 bg-white"
+            className="rounded-[20px] p-4 border border-gray-200 bg-white lg:hidden"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1416,10 +1708,10 @@ export default function AdminPage() {
           <div 
             className="rounded-[20px] p-4 border border-gray-200 bg-gray-50"
           >
-            <p className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wider">
+            <p className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wider lg:hidden">
               Ver reservas por día
             </p>
-            <div className="flex gap-1.5 overflow-x-auto">
+            <div className="flex gap-1.5 overflow-x-auto lg:flex-wrap">
               <button
                 onClick={() => setSelectedDayForList(null)}
                 className={`flex-shrink-0 px-3 py-1.5 rounded-[10px] border transition-all duration-200 active:scale-95 text-xs font-semibold whitespace-nowrap ${
@@ -1448,6 +1740,7 @@ export default function AdminPage() {
                 )
               })}
             </div>
+          </div>
           </div>
 
           {/* Vista de lista por día o todas las reservas */}
@@ -1478,12 +1771,30 @@ export default function AdminPage() {
                       <h3 className="text-lg font-bold text-gray-900">
                         {dayName.charAt(0).toUpperCase() + dayName.slice(1)}
                       </h3>
-                      <button
-                        onClick={() => setSelectedDayForList(null)}
-                        className="px-3 py-1.5 rounded-[8px] text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
-                      >
-                        Ver todas
-                      </button>
+                      <div className="flex items-center gap-3">
+                        {/* Switch confirmadas - inline en desktop */}
+                        <label className="hidden lg:flex items-center gap-2 cursor-pointer">
+                          <span className="text-xs font-medium text-gray-500">Confirmadas</span>
+                          <button
+                            onClick={() => setShowConfirmedBookings(!showConfirmedBookings)}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                              showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                showConfirmedBookings ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                              }`}
+                            />
+                          </button>
+                        </label>
+                        <button
+                          onClick={() => setSelectedDayForList(null)}
+                          className="px-3 py-1.5 rounded-[8px] text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+                        >
+                          Ver todas
+                        </button>
+                      </div>
                     </div>
                     
                     {dayBookings.length === 0 ? (
@@ -1492,7 +1803,7 @@ export default function AdminPage() {
                         <p className="text-gray-700 font-medium">No hay reservas para este día</p>
                       </div>
                     ) : (
-                      <div className="space-y-3">
+                      <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
                         {dayBookings.map((booking) => {
                           const userName = booking.user?.full_name || booking.user?.email?.split('@')[0] || 'Usuario desconocido'
                           
@@ -1512,11 +1823,22 @@ export default function AdminPage() {
                                   <p className="text-sm font-semibold text-gray-900 mb-1">
                                     {userName}
                                   </p>
-                                  {booking.carpoolUser && (
+                                  {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
                                     <div className="flex items-center gap-1.5 mb-1.5 text-orange-600">
                                       <Users className="w-3 h-3 flex-shrink-0" strokeWidth={2} />
                                       <span className="text-xs font-medium">
-                                        Con {booking.carpoolUser.full_name || booking.carpoolUser.email?.split('@')[0] || 'otro usuario'}
+                                        {(() => {
+                                          const names = booking.carpoolUsers!.map(
+                                            (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
+                                          )
+                                          if (names.length === 1) {
+                                            return `Con ${names[0]}`
+                                          }
+                                          if (names.length === 2) {
+                                            return `Con ${names[0]} y ${names[1]}`
+                                          }
+                                          return `Con ${names[0]} y ${names.length - 1} más`
+                                        })()}
                                       </span>
                                     </div>
                                   )}
@@ -1588,6 +1910,22 @@ export default function AdminPage() {
                 <h3 className="text-lg font-bold text-gray-900">
                   Todas las reservas
                 </h3>
+                {/* Switch confirmadas - inline en desktop */}
+                <label className="hidden lg:flex items-center gap-2 cursor-pointer">
+                  <span className="text-xs font-medium text-gray-500">Confirmadas</span>
+                  <button
+                    onClick={() => setShowConfirmedBookings(!showConfirmedBookings)}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                      showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        showConfirmedBookings ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                      }`}
+                    />
+                  </button>
+                </label>
               </div>
               
               {bookings.length === 0 ? (
@@ -1596,7 +1934,7 @@ export default function AdminPage() {
                   <p className="text-gray-700 font-medium">No hay reservas activas</p>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
                   {bookings
                     .filter(b => {
                       if (b.status === 'cancelled') return false
@@ -1634,11 +1972,22 @@ export default function AdminPage() {
                               <p className="text-xs text-gray-500 mb-1.5">
                                 {bookingDate.charAt(0).toUpperCase() + bookingDate.slice(1)}
                               </p>
-                              {booking.carpoolUser && (
+                              {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
                                 <div className="flex items-center gap-1.5 text-orange-600">
                                   <Users className="w-3 h-3 flex-shrink-0" strokeWidth={2} />
                                   <span className="text-xs font-medium">
-                                    Con {booking.carpoolUser.full_name || booking.carpoolUser.email?.split('@')[0] || 'otro usuario'}
+                                    {(() => {
+                                      const names = booking.carpoolUsers!.map(
+                                        (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
+                                      )
+                                      if (names.length === 1) {
+                                        return `Con ${names[0]}`
+                                      }
+                                      if (names.length === 2) {
+                                        return `Con ${names[0]} y ${names[1]}`
+                                      }
+                                      return `Con ${names[0]} y ${names.length - 1} más`
+                                    })()}
                                   </span>
                                 </div>
                               )}
@@ -1848,18 +2197,35 @@ export default function AdminPage() {
             const grandTotal = Array.from(userTotals.values()).reduce((sum, total) => sum + total, 0)
             
             return (
+              <>
+              {/* Resumen estadístico rápido - solo desktop */}
+              <div className="hidden lg:grid lg:grid-cols-3 gap-4 mb-4">
+                <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Total reservas</p>
+                  <p className="text-3xl font-bold text-gray-900">{grandTotal}</p>
+                </div>
+                <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Usuarios</p>
+                  <p className="text-3xl font-bold text-gray-900">{sortedUsers.length}</p>
+                </div>
+                <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
+                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Media diaria</p>
+                  <p className="text-3xl font-bold text-gray-900">{weekDays.length > 0 ? (grandTotal / weekDays.length).toFixed(1) : '0'}</p>
+                </div>
+              </div>
+
               <div className="rounded-[20px] border border-gray-200 bg-white overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full border-collapse">
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider sticky left-0 bg-gray-50 z-10">
+                        <th className="px-4 py-3 lg:py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider sticky left-0 bg-gray-50 z-10 lg:min-w-[200px]">
                           Usuario
                         </th>
                         {weekDays.map((day, index) => (
                           <th 
                             key={index}
-                            className="px-3 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[60px]"
+                            className="px-3 py-3 lg:py-4 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[60px] lg:min-w-[80px]"
                           >
                             {dayLabels[index]}
                             <div className="text-[10px] font-normal text-gray-500 mt-0.5">
@@ -1867,7 +2233,7 @@ export default function AdminPage() {
                             </div>
                           </th>
                         ))}
-                        <th className="px-4 py-3 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-100">
+                        <th className="px-4 py-3 lg:py-4 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-100">
                           Total
                         </th>
                       </tr>
@@ -1885,8 +2251,13 @@ export default function AdminPage() {
                               userIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                             }`}
                           >
-                            <td className="px-4 py-3 text-sm font-medium text-gray-900 sticky left-0 bg-inherit z-10">
-                              {userName}
+                            <td className="px-4 py-3 lg:py-4 text-sm font-medium text-gray-900 sticky left-0 bg-inherit z-10">
+                              <span className="lg:flex lg:items-center lg:gap-2">
+                                <span className="hidden lg:inline-flex w-7 h-7 rounded-full items-center justify-center text-[10px] font-bold text-white flex-shrink-0" style={{ backgroundColor: '#8E8E93' }}>
+                                  {userName.charAt(0).toUpperCase()}
+                                </span>
+                                {userName}
+                              </span>
                             </td>
                             {weekDays.map((day, dayIndex) => {
                               const dayStr = format(day, 'yyyy-MM-dd')
@@ -1947,6 +2318,7 @@ export default function AdminPage() {
                   </table>
                 </div>
               </div>
+              </>
             )
           })()}
         </div>

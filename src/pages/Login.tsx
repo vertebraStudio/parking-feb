@@ -50,7 +50,7 @@ export default function Login() {
 
   return (
     <div 
-      className="min-h-screen flex flex-col"
+      className="min-h-screen flex flex-col items-center"
       style={{
         background: 'linear-gradient(to bottom, #111C4E 0%, #111C4E 60%, #FF9500 100%)',
       }}
@@ -62,7 +62,7 @@ export default function Login() {
           className="h-64 w-64 object-contain"
         />
       </div>
-      <div className="flex-1 flex justify-center">
+      <div className="flex-1 flex justify-center w-full lg:max-w-md">
         <div 
           className="w-full max-w-md rounded-t-[20px] shadow-lg p-8 border-t border-l border-r border-gray-200 bg-white"
         >

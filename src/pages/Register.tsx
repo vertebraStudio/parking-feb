@@ -30,6 +30,20 @@ export default function Register() {
       if (signUpError) throw signUpError
 
       if (data.user) {
+        // Lanzar notificación para administradores de nuevo usuario pendiente de validar
+        try {
+          console.log('🚀 Calling notify-user-registered for user:', data.user.id)
+          const { data: fnData, error: fnError } = await supabase.functions.invoke('notify-user-registered', {
+            body: { userId: data.user.id },
+          })
+          console.log('📥 notify-user-registered response:', { data: fnData, error: fnError })
+          if (fnError) {
+            console.error('❌ notify-user-registered error:', fnError)
+          }
+        } catch (fnErr: any) {
+          console.error('❌ notify-user-registered failed (non-blocking):', fnErr)
+        }
+
         // El trigger automáticamente creará el perfil en la tabla profiles
         // Redirigir al login con mensaje de éxito
         navigate('/login', { 
@@ -47,11 +61,11 @@ export default function Register() {
 
   return (
     <div 
-      className="min-h-screen flex items-center justify-center p-4 bg-white"
+      className="min-h-screen flex items-center justify-center p-4 bg-white lg:bg-gray-50"
     >
       <div className="w-full max-w-md">
         <div 
-          className="rounded-[20px] shadow-lg p-8 border border-gray-200 bg-white"
+          className="rounded-[20px] shadow-lg p-8 lg:p-10 border border-gray-200 bg-white"
         >
           <h1 
             className="text-3xl font-semibold text-gray-900 mb-2 text-center tracking-tight"

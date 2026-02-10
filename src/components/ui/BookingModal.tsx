@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils'
 interface BookingModalProps {
   isOpen: boolean
   onClose: () => void
-  onConfirm: (carpoolUserId: string | null) => void
+  onConfirm: (carpoolUserIds: string[]) => void
   title: string
   message: string
   confirmText?: string
@@ -14,8 +14,8 @@ interface BookingModalProps {
   loading?: boolean
   availableCarpoolUsers: Profile[]
   loadingCarpoolUsers: boolean
-  selectedCarpoolUser: string | null
-  onSelectCarpoolUser: (userId: string | null) => void
+  selectedCarpoolUserIds: string[]
+  onSelectCarpoolUsers: (userIds: string[]) => void
 }
 
 export default function BookingModal({
@@ -29,8 +29,8 @@ export default function BookingModal({
   loading = false,
   availableCarpoolUsers,
   loadingCarpoolUsers,
-  selectedCarpoolUser,
-  onSelectCarpoolUser,
+  selectedCarpoolUserIds,
+  onSelectCarpoolUsers,
 }: BookingModalProps) {
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -102,12 +102,12 @@ export default function BookingModal({
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
                 <button
                   onClick={() => {
-                    onSelectCarpoolUser(null)
+                    onSelectCarpoolUsers([])
                     setSearchQuery('')
                   }}
                   className={cn(
                     "w-full p-3 rounded-[12px] border text-left transition-all",
-                    !selectedCarpoolUser
+                    selectedCarpoolUserIds.length === 0
                       ? "bg-orange-50 border-orange-300 text-orange-900"
                       : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
                   )}
@@ -118,10 +118,19 @@ export default function BookingModal({
                   filteredUsers.map((profile) => (
                     <button
                       key={profile.id}
-                      onClick={() => onSelectCarpoolUser(profile.id)}
+                      onClick={() => {
+                        const isSelected = selectedCarpoolUserIds.includes(profile.id)
+                        if (isSelected) {
+                          onSelectCarpoolUsers(
+                            selectedCarpoolUserIds.filter(id => id !== profile.id)
+                          )
+                        } else {
+                          onSelectCarpoolUsers([...selectedCarpoolUserIds, profile.id])
+                        }
+                      }}
                       className={cn(
                         "w-full p-3 rounded-[12px] border text-left transition-all",
-                        selectedCarpoolUser === profile.id
+                        selectedCarpoolUserIds.includes(profile.id)
                           ? "bg-orange-50 border-orange-300 text-orange-900"
                           : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
                       )}
@@ -167,7 +176,7 @@ export default function BookingModal({
             onClick={() => {
               if (!loading) {
                 setSearchQuery('')
-                onConfirm(selectedCarpoolUser)
+                onConfirm(selectedCarpoolUserIds)
               }
             }}
             disabled={loading}

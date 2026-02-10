@@ -72,6 +72,22 @@ export default function NotificationsPage() {
 
       if (!error && tokens && tokens.length > 0) {
         setPushStatus('enabled')
+
+        // Si ya hay tokens registrados y el permiso del navegador sigue siendo "granted",
+        // intentar re-registrar silenciosamente el token para refrescarlo / corregir estados raros.
+        try {
+          if (typeof window !== 'undefined' && 'Notification' in window) {
+            if (Notification.permission === 'granted') {
+              // Esto no vuelve a mostrar el prompt si ya está concedido.
+              // Simplemente fuerza a FCM a emitir (o refrescar) el token
+              // y lo guarda en la tabla push_tokens con upsert.
+              await registerPushTokenForCurrentUser()
+            }
+          }
+        } catch (err) {
+          // No romper la UI si falla; solo log para debug.
+          console.error('Error auto-refrescando token de push:', err)
+        }
       }
     } catch {
       // no-op
@@ -195,9 +211,9 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div className="p-4 min-h-screen bg-white">
+    <div className="p-4 lg:p-6 min-h-screen bg-white">
       <h1
-        className="text-3xl font-semibold text-gray-900 tracking-tight mb-4"
+        className="text-3xl lg:text-4xl font-semibold text-gray-900 tracking-tight mb-4 lg:mb-6"
         style={{
           fontFamily:
             '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
@@ -281,25 +297,25 @@ export default function NotificationsPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
           {items.map((n) => (
             <div
               key={n.id}
               className="relative rounded-[20px] p-4 border border-gray-200 bg-white"
             >
-              <button
-                onClick={() => {
-                  // Si es una notificación de solicitud de reserva, navegar a admin
-                  if (n.type === 'booking_requested') {
-                    markAsRead(n)
-                    navigate('/admin')
-                  } else {
-                    // Para otros tipos, solo marcar como leída
-                    markAsRead(n)
-                  }
-                }}
-                className="w-full text-left active:scale-[0.99] transition"
-              >
+          <button
+            onClick={() => {
+              // Navegar a admin para ciertos tipos especiales, tras marcar como leída
+              if (n.type === 'booking_requested' || n.type === 'user_registered') {
+                markAsRead(n)
+                navigate('/admin')
+              } else {
+                // Para otros tipos, solo marcar como leída
+                markAsRead(n)
+              }
+            }}
+            className="w-full text-left active:scale-[0.99] transition"
+          >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="text-gray-900 font-semibold flex items-center gap-1">

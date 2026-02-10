@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { User, LogOut, Calendar, CheckCircle, Clock, TrendingUp, BarChart3, ArrowLeft, XCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { User, LogOut, Calendar, CheckCircle, Clock, TrendingUp, BarChart3, ArrowLeft, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Profile, Booking, ParkingSpot } from '../types'
 import ConfirmModal from '../components/ui/ConfirmModal'
@@ -20,13 +20,18 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true)
   const [showLogoutModal, setShowLogoutModal] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
-  const [showVerifyModal, setShowVerifyModal] = useState(false)
   const [showRoleModal, setShowRoleModal] = useState(false)
   const [newRole, setNewRole] = useState<'user' | 'directivo' | 'admin'>('user')
   const [processing, setProcessing] = useState(false)
+  const [showDeleteUserModal, setShowDeleteUserModal] = useState(false)
+  const [deletingUser, setDeletingUser] = useState(false)
+  const [showVerifyUserModal, setShowVerifyUserModal] = useState(false)
+  const [verifyingUser, setVerifyingUser] = useState(false)
   const [showBookingHistory, setShowBookingHistory] = useState(false)
   const isViewingOtherUser = userId && userId !== currentUser?.id
-  const canVerifyUser = currentUser?.role === 'admin' && isViewingOtherUser && user?.role === 'user'
+  // Solo permitir que un admin elimine usuarios normales (no admins/directivos) y nunca a sí mismo
+  const canDeleteUser = currentUser?.role === 'admin' && isViewingOtherUser && user?.role === 'user'
+  const canVerifyUser = currentUser?.role === 'admin' && isViewingOtherUser && user?.role === 'user' && !user?.is_verified
   const canChangeRole = currentUser?.role === 'admin' && isViewingOtherUser
 
   useEffect(() => {
@@ -214,29 +219,118 @@ export default function ProfilePage() {
     navigate('/admin')
   }
 
-  const handleVerifyUser = () => {
-    setShowVerifyModal(true)
+  const handleDeleteUserClick = () => {
+    setShowDeleteUserModal(true)
   }
 
-  const confirmVerify = async () => {
-    if (!user) return
+  const handleVerifyUserClick = () => {
+    setShowVerifyUserModal(true)
+  }
 
-    setProcessing(true)
+  const confirmDeleteUser = async () => {
+    if (!user || !currentUser) return
+
+    setDeletingUser(true)
+    try {
+      // 1) Intentar borrar completamente usando la Edge Function (auth.users + datos públicos).
+      try {
+        const { data, error } = await supabase.functions.invoke('delete-user-completely', {
+          body: { userId: user.id },
+        })
+        console.log('delete-user-completely (ProfilePage) result:', { data, error })
+      } catch (fnErr: any) {
+        console.warn('⚠️ Error llamando a delete-user-completely (ProfilePage), se continuará con borrado local:', fnErr)
+      }
+
+      // 2) Borrado local en tablas públicas como respaldo (no depende de la Edge Function)
+      try {
+        const { error: bookingsError } = await supabase
+          .from('bookings')
+          .delete()
+          .eq('user_id', user.id)
+        if (bookingsError) {
+          console.error('Error deleting user bookings (ProfilePage, fallback):', bookingsError)
+        }
+
+        const { error: carpoolError } = await supabase
+          .from('booking_carpool_users')
+          .delete()
+          .eq('user_id', user.id)
+        if (carpoolError) {
+          console.error('Error deleting booking_carpool_users (ProfilePage, fallback):', carpoolError)
+        }
+
+        const { error: notificationsError } = await supabase
+          .from('notifications')
+          .delete()
+          .eq('user_id', user.id)
+        if (notificationsError) {
+          console.error('Error deleting user notifications (ProfilePage, fallback):', notificationsError)
+        }
+
+        const { error: pushTokensError } = await supabase
+          .from('push_tokens')
+          .delete()
+          .eq('user_id', user.id)
+        if (pushTokensError) {
+          console.error('Error deleting user push tokens (ProfilePage, fallback):', pushTokensError)
+        }
+
+        const { error: spotsError } = await supabase
+          .from('parking_spots')
+          .update({ assigned_to: null, is_released: false })
+          .eq('assigned_to', user.id)
+        if (spotsError) {
+          console.error('Error clearing executive spots for user (ProfilePage, fallback):', spotsError)
+        }
+
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .delete()
+          .eq('id', user.id)
+
+        if (profileError) {
+          console.error('Error deleting user profile (ProfilePage, fallback):', profileError)
+          alert('No se ha podido eliminar el usuario. Revisa la consola para más detalles.')
+          return
+        }
+      } catch (fallbackErr: any) {
+        console.error('❌ Error en el borrado local de datos del usuario (ProfilePage):', fallbackErr)
+        alert('No se ha podido eliminar el usuario. Revisa la consola para más detalles.')
+        return
+      }
+
+      // 3) Navegar de vuelta al panel de admin después de eliminar
+      setShowDeleteUserModal(false)
+      navigate('/admin')
+    } catch (err: any) {
+      console.error('Error deleting user:', err)
+      alert(`Error al eliminar el usuario: ${err.message || 'Error desconocido'}`)
+    } finally {
+      setDeletingUser(false)
+    }
+  }
+
+  const confirmVerifyUser = async () => {
+    if (!user || !currentUser) return
+
+    setVerifyingUser(true)
     try {
       const { error } = await supabase
         .from('profiles')
-        .update({ is_verified: !user.is_verified })
+        .update({ is_verified: true })
         .eq('id', user.id)
 
       if (error) throw error
 
-      // Recargar el perfil del usuario
+      // Recargar el perfil del usuario para reflejar el estado verificado
       await loadUser(user.id)
-      setShowVerifyModal(false)
+      setShowVerifyUserModal(false)
     } catch (err: any) {
-      console.error('Error updating profile:', err)
+      console.error('Error verifying user:', err)
+      alert(`Error al verificar el usuario: ${err.message || 'Error desconocido'}`)
     } finally {
-      setProcessing(false)
+      setVerifyingUser(false)
     }
   }
 
@@ -423,7 +517,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="p-4 pb-24 min-h-screen bg-white">
+    <div className="p-4 lg:p-6 pb-24 lg:pb-8 min-h-screen bg-white">
       <div className="flex items-center gap-4 mb-6">
         {isViewingOtherUser && (
           <button
@@ -434,7 +528,7 @@ export default function ProfilePage() {
           </button>
         )}
         <h1 
-          className="text-3xl font-semibold text-gray-900 tracking-tight flex-1"
+          className="text-3xl lg:text-4xl font-semibold text-gray-900 tracking-tight flex-1"
           style={{ 
             fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
             letterSpacing: '-0.5px'
@@ -456,40 +550,53 @@ export default function ProfilePage() {
             <User className="w-8 h-8 text-white" strokeWidth={2.5} />
           </div>
           <div className="flex-1">
-            <h2 
-              className="text-xl font-bold text-gray-900"
-              style={{ 
-                fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-              }}
-            >
-              {user!.full_name || 'Usuario'}
-            </h2>
-            <p className="text-sm text-gray-600">{user!.email}</p>
-            <div className="flex items-center gap-2 mt-2">
-              {user!.role === 'admin' && (
-                <span 
-                  className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
-                  style={{ backgroundColor: '#FF9500' }}
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 
+                  className="text-xl font-bold text-gray-900"
+                  style={{ 
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
+                  }}
                 >
-                  ADMINISTRADOR
-                </span>
-              )}
-              {user!.role === 'directivo' && (
-                <span 
-                  className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
-                  style={{ backgroundColor: '#111C4E' }}
+                  {user!.full_name || 'Usuario'}
+                </h2>
+                <p className="text-sm text-gray-600">{user!.email}</p>
+                <div className="flex items-center gap-2 mt-2">
+                  {user!.role === 'admin' && (
+                    <span 
+                      className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
+                      style={{ backgroundColor: '#FF9500' }}
+                    >
+                      ADMINISTRADOR
+                    </span>
+                  )}
+                  {user!.role === 'directivo' && (
+                    <span 
+                      className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
+                      style={{ backgroundColor: '#111C4E' }}
+                    >
+                      DIRECTIVO
+                    </span>
+                  )}
+                  {user!.is_verified && user!.role === 'user' && (
+                    <span 
+                      className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px] flex items-center gap-1"
+                      style={{ backgroundColor: '#34C759' }}
+                    >
+                      <CheckCircle className="w-3 h-3" strokeWidth={2.5} />
+                      Verificado
+                    </span>
+                  )}
+                </div>
+              </div>
+              {canDeleteUser && (
+                <button
+                  onClick={handleDeleteUserClick}
+                  className="p-2 rounded-full border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 active:scale-95 transition-all duration-200"
+                  title="Eliminar usuario permanentemente"
                 >
-                  DIRECTIVO
-                </span>
-              )}
-              {user!.is_verified && user!.role === 'user' && (
-                <span 
-                  className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px] flex items-center gap-1"
-                  style={{ backgroundColor: '#34C759' }}
-                >
-                  <CheckCircle className="w-3 h-3" strokeWidth={2.5} />
-                  Verificado
-                </span>
+                  <Trash2 className="w-4 h-4" strokeWidth={2.5} />
+                </button>
               )}
             </div>
           </div>
@@ -516,41 +623,21 @@ export default function ProfilePage() {
           </div>
         )}
         {canVerifyUser && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
+          <div className="mt-3">
             <button
-              onClick={handleVerifyUser}
-              className={`w-full px-4 py-2.5 rounded-[14px] font-semibold transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 ${
-                user!.is_verified
-                  ? 'border border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100'
-                  : 'text-white'
-              }`}
-              style={
-                !user!.is_verified
-                  ? {
-                      backgroundColor: '#34C759',
-                      boxShadow: '0 2px 8px rgba(52, 199, 89, 0.3)'
-                    }
-                  : {}
-              }
+              onClick={handleVerifyUserClick}
+              className="w-full px-4 py-2.5 rounded-[14px] font-semibold transition-all duration-200 active:scale-95 flex items-center justify-center gap-2 border border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
             >
-              {user!.is_verified ? (
-                <>
-                  <XCircle className="w-4 h-4" strokeWidth={2.5} />
-                  Desverificar Usuario
-                </>
-              ) : (
-                <>
-                  <CheckCircle className="w-4 h-4" strokeWidth={2.5} />
-                  Verificar Usuario
-                </>
-              )}
+              <CheckCircle className="w-4 h-4" strokeWidth={2.5} />
+              Aceptar usuario
             </button>
           </div>
         )}
       </div>
 
-      {/* Estadísticas semanales */}
-      <div className="mb-6">
+      {/* Estadísticas semanales y mensuales */}
+      <div className="lg:grid lg:grid-cols-2 lg:gap-6 mb-6">
+      <div className="mb-6 lg:mb-0">
         <div className="flex items-center gap-2 mb-3">
           <Calendar className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
           <h2 
@@ -595,7 +682,7 @@ export default function ProfilePage() {
       </div>
 
       {/* Estadísticas mensuales */}
-      <div className="mb-6">
+      <div>
         <div className="flex items-center gap-2 mb-3">
           <TrendingUp className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
           <h2 
@@ -638,6 +725,7 @@ export default function ProfilePage() {
           </div>
         </div>
       </div>
+      </div>
 
       {/* Historial de reservas - ocultable */}
       {bookings.length > 0 && (
@@ -666,7 +754,7 @@ export default function ProfilePage() {
             )}
           </button>
           {showBookingHistory && (
-            <div className="mt-3 space-y-2">
+            <div className="mt-3 space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
             {bookings.map((booking) => (
               <div
                 key={booking.id}
@@ -754,19 +842,35 @@ export default function ProfilePage() {
       />
 
       <ConfirmModal
-        isOpen={showVerifyModal}
-        onClose={() => setShowVerifyModal(false)}
-        onConfirm={confirmVerify}
-        title={user?.is_verified ? 'Desverificar Usuario' : 'Verificar Usuario'}
+        isOpen={showDeleteUserModal}
+        onClose={() => setShowDeleteUserModal(false)}
+        onConfirm={confirmDeleteUser}
+        title="Eliminar usuario"
         message={
           user
-            ? `¿Estás seguro de que deseas ${user!.is_verified ? 'desverificar' : 'verificar'} a ${user!.full_name || user!.email}?`
+            ? `¿Estás seguro de que deseas eliminar permanentemente a ${user!.full_name || user!.email}? Esta acción no se puede deshacer.`
             : ''
         }
-        confirmText={user?.is_verified ? 'Sí, desverificar' : 'Sí, verificar'}
+        confirmText="Sí, eliminar"
         cancelText="Cancelar"
-        loading={processing}
-        confirmButtonClass={user?.is_verified ? 'bg-gray-600 hover:bg-gray-700' : 'bg-green-600 hover:bg-green-700'}
+        loading={deletingUser}
+        confirmButtonClass="bg-red-600 hover:bg-red-700"
+      />
+
+      <ConfirmModal
+        isOpen={showVerifyUserModal}
+        onClose={() => setShowVerifyUserModal(false)}
+        onConfirm={confirmVerifyUser}
+        title="Aceptar usuario"
+        message={
+          user
+            ? `¿Estás seguro de que deseas aceptar y verificar a ${user!.full_name || user!.email}?`
+            : ''
+        }
+        confirmText="Sí, aceptar"
+        cancelText="Cancelar"
+        loading={verifyingUser}
+        confirmButtonClass="bg-green-600 hover:bg-green-700"
       />
 
       <ConfirmModal

@@ -11,7 +11,8 @@ import { es } from 'date-fns/locale'
 
 interface BookingWithSpot extends Booking {
   spot?: ParkingSpot
-  carpoolUser?: Profile
+  // Compañeros de coche (pueden ser varios)
+  carpoolUsers?: Profile[]
 }
 
 export default function BookingsPage() {
@@ -155,17 +156,31 @@ export default function BookingsPage() {
           }
         }
 
-        // Cargar perfiles de usuarios con los que van en coche
-        const carpoolUserIds = bookingsData
+        // Cargar relaciones de carpooling múltiple desde booking_carpool_users
+        const bookingIds = bookingsData.map(b => b.id)
+        const { data: carpoolLinks, error: carpoolLinksError } = await supabase
+          .from('booking_carpool_users')
+          .select('*')
+          .in('booking_id', bookingIds)
+
+        if (carpoolLinksError) {
+          console.error('Error loading booking_carpool_users:', carpoolLinksError)
+        }
+
+        // IDs de compañeros de coche (incluyendo columna antigua y nueva tabla)
+        const legacyCarpoolIds = bookingsData
           .map(b => b.carpool_with_user_id)
           .filter((id): id is string => id !== null)
+
+        const linksUserIds = (carpoolLinks || []).map(link => link.user_id as string)
+        const allCarpoolUserIds = Array.from(new Set([...legacyCarpoolIds, ...linksUserIds]))
         
         let carpoolProfilesMap = new Map<string, Profile>()
-        if (carpoolUserIds.length > 0) {
+        if (allCarpoolUserIds.length > 0) {
           const { data: carpoolProfilesData } = await supabase
             .from('profiles')
             .select('*')
-            .in('id', carpoolUserIds)
+            .in('id', allCarpoolUserIds)
           
           if (carpoolProfilesData) {
             carpoolProfilesData.forEach(profile => {
@@ -174,12 +189,37 @@ export default function BookingsPage() {
           }
         }
 
-        // Combinar reservas con información de plazas y carpooling
-        const bookingsWithSpots: BookingWithSpot[] = bookingsData.map(booking => ({
-          ...booking,
-          spot: spotsData?.find(spot => spot.id === booking.spot_id),
-          carpoolUser: booking.carpool_with_user_id ? carpoolProfilesMap.get(booking.carpool_with_user_id) : undefined
-        }))
+        // Combinar reservas con información de plazas y carpooling (múltiples compañeros)
+        const bookingsWithSpots: BookingWithSpot[] = bookingsData.map(booking => {
+          // Todos los enlaces de carpool para esta reserva
+          const linksForBooking = (carpoolLinks || []).filter(link => link.booking_id === booking.id)
+
+          // Construir lista de compañeros de coche únicos
+          const usersFromLinks = linksForBooking
+            .map(link => carpoolProfilesMap.get(link.user_id))
+            .filter((u): u is Profile => !!u)
+
+          const carpoolUsersMap = new Map<string, Profile>()
+          usersFromLinks.forEach(u => carpoolUsersMap.set(u.id, u))
+
+          // Asegurar que la columna antigua (carpool_with_user_id) también se incluya como primer compañero si existe
+          if (booking.carpool_with_user_id) {
+            const legacyProfile = carpoolProfilesMap.get(booking.carpool_with_user_id)
+            if (legacyProfile) {
+              // Insertar al principio
+              carpoolUsersMap.delete(legacyProfile.id)
+              carpoolUsersMap.set(legacyProfile.id, legacyProfile)
+            }
+          }
+
+          const carpoolUsers = Array.from(carpoolUsersMap.values())
+
+          return {
+            ...booking,
+            spot: spotsData?.find(spot => spot.id === booking.spot_id),
+            carpoolUsers,
+          }
+        })
 
         setBookings(bookingsWithSpots)
       } else {
@@ -306,19 +346,46 @@ export default function BookingsPage() {
     setShowCarpoolModal(true)
   }
 
-  // Actualizar compañero de coche
-  const handleUpdateCarpool = async (carpoolUserId: string | null) => {
+  // Actualizar compañeros de coche (pueden ser varios)
+  const handleUpdateCarpool = async (carpoolUserIds: string[]) => {
     if (!bookingForCarpool || !user) return
 
     setUpdatingCarpool(true)
     try {
-      const { error } = await supabase
+      // Tomar el primer compañero como principal para compatibilidad con la columna antigua
+      const primaryCarpoolUserId = carpoolUserIds.length > 0 ? carpoolUserIds[0] : null
+
+      // Actualizar columna legacy (carpool_with_user_id) para compatibilidad con vistas antiguas
+      const { error: bookingError } = await supabase
         .from('bookings')
-        .update({ carpool_with_user_id: carpoolUserId })
+        .update({ carpool_with_user_id: primaryCarpoolUserId })
         .eq('id', bookingForCarpool.id)
         .eq('user_id', user.id)
 
-      if (error) throw error
+      if (bookingError) throw bookingError
+
+      // Sincronizar tabla booking_carpool_users con la lista completa de compañeros
+      const { error: deleteError } = await supabase
+        .from('booking_carpool_users')
+        .delete()
+        .eq('booking_id', bookingForCarpool.id)
+
+      if (deleteError) {
+        console.error('Error deleting previous carpool users:', deleteError)
+      }
+
+      if (carpoolUserIds.length > 0) {
+        const inserts = carpoolUserIds.map(userId => ({
+          booking_id: bookingForCarpool.id,
+          user_id: userId,
+        }))
+
+        const { error: insertError } = await supabase
+          .from('booking_carpool_users')
+          .insert(inserts)
+
+        if (insertError) throw insertError
+      }
 
       // Recargar reservas
       await loadBookings()
@@ -515,7 +582,7 @@ export default function BookingsPage() {
   return (
     <div 
       ref={containerRef}
-      className="p-4 pb-24 min-h-screen bg-white"
+      className="p-4 lg:p-6 pb-24 lg:pb-8 min-h-screen bg-white"
     >
       {/* Indicador de pull-to-refresh */}
       {(pullDistance > 0 || isRefreshing) && (
@@ -535,7 +602,7 @@ export default function BookingsPage() {
         </div>
       )}
       <h1 
-        className="text-3xl font-semibold mb-6 text-gray-900 tracking-tight"
+        className="text-3xl lg:text-4xl font-semibold mb-6 text-gray-900 tracking-tight"
         style={{ 
           fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
           letterSpacing: '-0.5px'
@@ -700,7 +767,7 @@ export default function BookingsPage() {
                   Reservas Confirmadas ({bookings.filter(b => b.status === 'confirmed').length})
                 </h2>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
                 {bookings
                   .filter(b => b.status === 'confirmed')
                   .map((booking) => (
@@ -723,41 +790,49 @@ export default function BookingsPage() {
                               </h3>
                             </div>
                           )}
-                          <div className="flex items-center gap-2 text-gray-900">
-                            <Calendar className="w-4 h-4" strokeWidth={2.5} />
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-base font-bold">{formatDate(booking.date)}</span>
-                              {(() => {
-                                const date = new Date(booking.date)
-                                const today = new Date()
-                                today.setHours(0, 0, 0, 0)
-                                const tomorrow = new Date(today)
-                                tomorrow.setDate(tomorrow.getDate() + 1)
-                                const bookingDate = new Date(date)
-                                bookingDate.setHours(0, 0, 0, 0)
-                                
-                                if (bookingDate.getTime() === today.getTime()) {
-                                  return (
-                                    <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-green-100 text-green-700">
-                                      Hoy
-                                    </span>
-                                  )
-                                } else if (bookingDate.getTime() === tomorrow.getTime()) {
-                                  return (
-                                    <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-blue-100 text-blue-700">
-                                      Mañana
-                                    </span>
-                                  )
-                                }
-                                return null
-                              })()}
-                            </div>
+                          <div className="flex items-center gap-2 flex-wrap text-gray-900">
+                            <span className="text-base font-bold">{formatDate(booking.date)}</span>
+                            {(() => {
+                              const date = new Date(booking.date)
+                              const today = new Date()
+                              today.setHours(0, 0, 0, 0)
+                              const tomorrow = new Date(today)
+                              tomorrow.setDate(tomorrow.getDate() + 1)
+                              const bookingDate = new Date(date)
+                              bookingDate.setHours(0, 0, 0, 0)
+                              
+                              if (bookingDate.getTime() === today.getTime()) {
+                                return (
+                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-green-100 text-green-700">
+                                    Hoy
+                                  </span>
+                                )
+                              } else if (bookingDate.getTime() === tomorrow.getTime()) {
+                                return (
+                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-blue-100 text-blue-700">
+                                    Mañana
+                                  </span>
+                                )
+                              }
+                              return null
+                            })()}
                           </div>
-                          {booking.carpoolUser && (
+                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
                             <div className="flex items-center gap-1.5 text-orange-600 mt-1.5">
                               <Users className="w-3.5 h-3.5" strokeWidth={2.5} />
                               <span className="text-xs font-medium">
-                                Con {booking.carpoolUser.full_name || booking.carpoolUser.email?.split('@')[0] || 'otro usuario'}
+                                {(() => {
+                                  const names = booking.carpoolUsers!.map(
+                                    (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
+                                  )
+                                  if (names.length === 1) {
+                                    return `Con ${names[0]}`
+                                  }
+                                  if (names.length === 2) {
+                                    return `Con ${names[0]} y ${names[1]}`
+                                  }
+                                  return `Con ${names[0]} y ${names.length - 1} más`
+                                })()}
                               </span>
                             </div>
                           )}
@@ -771,7 +846,7 @@ export default function BookingsPage() {
                           className="px-2.5 py-1 rounded-[6px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1 text-gray-700 hover:bg-gray-50"
                         >
                           <Edit2 className="w-3 h-3" strokeWidth={2} />
-                          {booking.carpoolUser ? 'Cambiar' : 'Añadir'} compañero
+                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 ? 'Cambiar' : 'Añadir'} compañero
                         </button>
                         {isExecutiveBooking(booking) ? (
                           <button
@@ -812,7 +887,7 @@ export default function BookingsPage() {
                   Reservas Pendientes ({bookings.filter(b => b.status === 'pending').length})
                 </h2>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
                 {bookings
                   .filter(b => b.status === 'pending')
                   .map((booking) => (
@@ -835,41 +910,49 @@ export default function BookingsPage() {
                               </h3>
                             </div>
                           )}
-                          <div className="flex items-center gap-2 text-gray-900">
-                            <Calendar className="w-4 h-4" strokeWidth={2.5} />
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-base font-bold">{formatDate(booking.date)}</span>
-                              {(() => {
-                                const date = new Date(booking.date)
-                                const today = new Date()
-                                today.setHours(0, 0, 0, 0)
-                                const tomorrow = new Date(today)
-                                tomorrow.setDate(tomorrow.getDate() + 1)
-                                const bookingDate = new Date(date)
-                                bookingDate.setHours(0, 0, 0, 0)
-                                
-                                if (bookingDate.getTime() === today.getTime()) {
-                                  return (
-                                    <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-green-100 text-green-700">
-                                      Hoy
-                                    </span>
-                                  )
-                                } else if (bookingDate.getTime() === tomorrow.getTime()) {
-                                  return (
-                                    <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-blue-100 text-blue-700">
-                                      Mañana
-                                    </span>
-                                  )
-                                }
-                                return null
-                              })()}
-                            </div>
+                          <div className="flex items-center gap-2 flex-wrap text-gray-900">
+                            <span className="text-base font-bold">{formatDate(booking.date)}</span>
+                            {(() => {
+                              const date = new Date(booking.date)
+                              const today = new Date()
+                              today.setHours(0, 0, 0, 0)
+                              const tomorrow = new Date(today)
+                              tomorrow.setDate(tomorrow.getDate() + 1)
+                              const bookingDate = new Date(date)
+                              bookingDate.setHours(0, 0, 0, 0)
+                              
+                              if (bookingDate.getTime() === today.getTime()) {
+                                return (
+                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-green-100 text-green-700">
+                                    Hoy
+                                  </span>
+                                )
+                              } else if (bookingDate.getTime() === tomorrow.getTime()) {
+                                return (
+                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-blue-100 text-blue-700">
+                                    Mañana
+                                  </span>
+                                )
+                              }
+                              return null
+                            })()}
                           </div>
-                          {booking.carpoolUser && (
+                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
                             <div className="flex items-center gap-1.5 text-orange-600 mt-1.5">
                               <Users className="w-3.5 h-3.5" strokeWidth={2.5} />
                               <span className="text-xs font-medium">
-                                Con {booking.carpoolUser.full_name || booking.carpoolUser.email?.split('@')[0] || 'otro usuario'}
+                                {(() => {
+                                  const names = booking.carpoolUsers!.map(
+                                    (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
+                                  )
+                                  if (names.length === 1) {
+                                    return `Con ${names[0]}`
+                                  }
+                                  if (names.length === 2) {
+                                    return `Con ${names[0]} y ${names[1]}`
+                                  }
+                                  return `Con ${names[0]} y ${names.length - 1} más`
+                                })()}
                               </span>
                             </div>
                           )}
@@ -883,7 +966,7 @@ export default function BookingsPage() {
                           className="px-2.5 py-1 rounded-[6px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1 text-gray-700 hover:bg-gray-50"
                         >
                           <Edit2 className="w-3 h-3" strokeWidth={2} />
-                          {booking.carpoolUser ? 'Cambiar' : 'Añadir'} compañero
+                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 ? 'Cambiar' : 'Añadir'} compañero
                         </button>
                         {isExecutiveBooking(booking) ? (
                           <button
@@ -924,7 +1007,7 @@ export default function BookingsPage() {
                   Lista de Espera ({bookings.filter(b => b.status === 'waitlist').length})
                 </h2>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
                 {bookings
                   .filter(b => b.status === 'waitlist')
                   .map((booking) => (
@@ -934,41 +1017,49 @@ export default function BookingsPage() {
                     >
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex-1">
-                          <div className="flex items-center gap-2 text-gray-900">
-                            <Calendar className="w-4 h-4" strokeWidth={2.5} />
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-base font-bold">{formatDate(booking.date)}</span>
-                              {(() => {
-                                const date = new Date(booking.date)
-                                const today = new Date()
-                                today.setHours(0, 0, 0, 0)
-                                const tomorrow = new Date(today)
-                                tomorrow.setDate(tomorrow.getDate() + 1)
-                                const bookingDate = new Date(date)
-                                bookingDate.setHours(0, 0, 0, 0)
-                                
-                                if (bookingDate.getTime() === today.getTime()) {
-                                  return (
-                                    <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-green-100 text-green-700">
-                                      Hoy
-                                    </span>
-                                  )
-                                } else if (bookingDate.getTime() === tomorrow.getTime()) {
-                                  return (
-                                    <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-blue-100 text-blue-700">
-                                      Mañana
-                                    </span>
-                                  )
-                                }
-                                return null
-                              })()}
-                            </div>
+                          <div className="flex items-center gap-2 flex-wrap text-gray-900">
+                            <span className="text-base font-bold">{formatDate(booking.date)}</span>
+                            {(() => {
+                              const date = new Date(booking.date)
+                              const today = new Date()
+                              today.setHours(0, 0, 0, 0)
+                              const tomorrow = new Date(today)
+                              tomorrow.setDate(tomorrow.getDate() + 1)
+                              const bookingDate = new Date(date)
+                              bookingDate.setHours(0, 0, 0, 0)
+                              
+                              if (bookingDate.getTime() === today.getTime()) {
+                                return (
+                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-green-100 text-green-700">
+                                    Hoy
+                                  </span>
+                                )
+                              } else if (bookingDate.getTime() === tomorrow.getTime()) {
+                                return (
+                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-blue-100 text-blue-700">
+                                    Mañana
+                                  </span>
+                                )
+                              }
+                              return null
+                            })()}
                           </div>
-                          {booking.carpoolUser && (
+                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
                             <div className="flex items-center gap-2 text-orange-600 mt-2">
                               <Users className="w-4 h-4" strokeWidth={2.5} />
                               <span className="text-sm font-medium">
-                                Con {booking.carpoolUser.full_name || booking.carpoolUser.email?.split('@')[0] || 'otro usuario'}
+                                {(() => {
+                                  const names = booking.carpoolUsers!.map(
+                                    (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
+                                  )
+                                  if (names.length === 1) {
+                                    return `Con ${names[0]}`
+                                  }
+                                  if (names.length === 2) {
+                                    return `Con ${names[0]} y ${names[1]}`
+                                  }
+                                  return `Con ${names[0]} y ${names.length - 1} más`
+                                })()}
                               </span>
                             </div>
                           )}
@@ -982,7 +1073,7 @@ export default function BookingsPage() {
                           className="px-2.5 py-1 rounded-[6px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1 text-gray-700 hover:bg-gray-50"
                         >
                           <Edit2 className="w-3 h-3" strokeWidth={2} />
-                          {booking.carpoolUser ? 'Cambiar' : 'Añadir'} compañero
+                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 ? 'Cambiar' : 'Añadir'} compañero
                         </button>
                         <button
                           onClick={() => handleCancelBooking(booking)}
@@ -1056,10 +1147,15 @@ export default function BookingsPage() {
         loading={updatingCarpool}
         availableCarpoolUsers={availableCarpoolUsers}
         loadingCarpoolUsers={loadingCarpoolUsers}
-        selectedCarpoolUser={bookingForCarpool?.carpool_with_user_id || null}
-        onSelectCarpoolUser={(userId) => {
+        selectedCarpoolUserIds={
+          bookingForCarpool?.carpoolUsers?.map(u => u.id) || []
+        }
+        onSelectCarpoolUsers={(userIds) => {
           if (bookingForCarpool) {
-            setBookingForCarpool({ ...bookingForCarpool, carpool_with_user_id: userId })
+            setBookingForCarpool({
+              ...bookingForCarpool,
+              carpoolUsers: availableCarpoolUsers.filter(u => userIds.includes(u.id)),
+            })
           }
         }}
       />

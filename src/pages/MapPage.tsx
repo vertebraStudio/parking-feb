@@ -16,7 +16,7 @@ export default function MapPage() {
   const location = useLocation()
   const [spots, setSpots] = useState<ParkingSpot[]>([])
   // const [bookings, setBookings] = useState<Booking[]>([]) // Eliminado - no se usa, solo se usa bookingsWithUsers
-  const [bookingsWithUsers, setBookingsWithUsers] = useState<(Booking & { user?: Profile; carpoolUser?: Profile })[]>([])
+  const [bookingsWithUsers, setBookingsWithUsers] = useState<(Booking & { user?: Profile; carpoolUsers?: Profile[] })[]>([])
   const [userBookings, setUserBookings] = useState<Booking[]>([]) // Todas las reservas del usuario
   const [spotBlocks, setSpotBlocks] = useState<SpotBlock[]>([]) // Bloqueos por fecha
   const [executiveProfiles, setExecutiveProfiles] = useState<Map<string, Profile>>(new Map()) // Perfiles de directivos asignados
@@ -337,14 +337,29 @@ export default function MapPage() {
         setBookingsWithUsers([])
       } else {
         
-        // Cargar perfiles de usuarios que tienen reservas (incluyendo carpooling)
+        // Cargar perfiles de usuarios que tienen reservas (incluyendo carpooling múltiple)
         if (bookingsData && bookingsData.length > 0) {
           const userIds = [...new Set(bookingsData.map(b => b.user_id))]
-          // También incluir usuarios con los que van en coche
-          const carpoolUserIds = bookingsData
+
+          // Leer tabla de relaciones de carpooling múltiple
+          const bookingIds = bookingsData.map(b => b.id)
+          const { data: carpoolLinks, error: carpoolLinksError } = await supabase
+            .from('booking_carpool_users')
+            .select('*')
+            .in('booking_id', bookingIds)
+
+          if (carpoolLinksError) {
+            console.error('Error loading booking_carpool_users (MapPage):', carpoolLinksError)
+          }
+
+          // IDs de compañeros de coche (legacy + nueva tabla)
+          const legacyCarpoolIds = bookingsData
             .map(b => b.carpool_with_user_id)
             .filter((id): id is string => id !== null)
-          const allUserIds = [...new Set([...userIds, ...carpoolUserIds])]
+          const linksUserIds = (carpoolLinks || []).map(link => link.user_id as string)
+          const allCarpoolUserIds = Array.from(new Set([...legacyCarpoolIds, ...linksUserIds]))
+
+          const allUserIds = Array.from(new Set([...userIds, ...allCarpoolUserIds]))
           
           const { data: profilesData, error: profilesError } = await supabase
             .from('profiles')
@@ -368,18 +383,41 @@ export default function MapPage() {
             setBookingsWithUsers(bookingsData.map(b => ({ ...b, user: undefined })))
           } else {
             console.log('Perfiles cargados:', profilesData?.length || 0, 'de', userIds.length, 'usuarios')
+
+            const profilesMap = new Map<string, Profile>()
+            profilesData?.forEach(p => profilesMap.set(p.id, p))
+
             const bookingsWithUserInfo = bookingsData.map(booking => {
-              const userProfile = profilesData?.find(p => p.id === booking.user_id)
-              const carpoolProfile = booking.carpool_with_user_id 
-                ? profilesData?.find(p => p.id === booking.carpool_with_user_id)
-                : null
+              const userProfile = profilesMap.get(booking.user_id)
+
+              // Construir lista de compañeros de coche
+              const linksForBooking = (carpoolLinks || []).filter(link => link.booking_id === booking.id)
+              const usersFromLinks = linksForBooking
+                .map(link => profilesMap.get(link.user_id))
+                .filter((u): u is Profile => !!u)
+
+              const carpoolUsersMap = new Map<string, Profile>()
+              usersFromLinks.forEach(u => carpoolUsersMap.set(u.id, u))
+
+              // Incluir también legacy carpool_with_user_id como primer compañero
+              if (booking.carpool_with_user_id) {
+                const legacyProfile = profilesMap.get(booking.carpool_with_user_id)
+                if (legacyProfile) {
+                  carpoolUsersMap.delete(legacyProfile.id)
+                  carpoolUsersMap.set(legacyProfile.id, legacyProfile)
+                }
+              }
+
+              const carpoolUsers = Array.from(carpoolUsersMap.values())
+
               if (!userProfile) {
                 console.warn(`No se encontró perfil para el usuario ${booking.user_id} en la reserva ${booking.id}`)
               }
+
               return {
                 ...booking,
                 user: userProfile,
-                carpoolUser: carpoolProfile
+                carpoolUsers,
               }
             })
             
@@ -1228,7 +1266,7 @@ export default function MapPage() {
   return (
     <div 
       ref={containerRef}
-      className="p-4 min-h-screen bg-white"
+      className="p-4 lg:p-6 min-h-screen bg-white"
       style={{
         minHeight: '100vh'
       }}
@@ -1251,9 +1289,9 @@ export default function MapPage() {
         </div>
       )}
       {/* Título */}
-      <div className="mb-4">
+      <div className="mb-4 lg:mb-6">
         <h1 
-          className="text-3xl font-semibold text-gray-900 tracking-tight"
+          className="text-3xl lg:text-4xl font-semibold text-gray-900 tracking-tight"
           style={{ 
             fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
             letterSpacing: '-0.5px'
@@ -1265,7 +1303,7 @@ export default function MapPage() {
 
       {/* Selector de semana */}
       <div 
-        className="mb-4 p-4 bg-gray-50 rounded-[20px] border border-gray-200"
+        className="mb-4 lg:mb-6 p-4 bg-gray-50 rounded-[20px] border border-gray-200"
       >
         <div className="flex items-center justify-between">
           <button

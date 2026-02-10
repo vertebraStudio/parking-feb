@@ -8,7 +8,7 @@ import ConfirmModal from './ui/ConfirmModal'
 
 interface DayBookingsListProps {
   date: string
-  bookings: (Booking & { user?: Profile; carpoolUser?: Profile })[]
+  bookings: (Booking & { user?: Profile; carpoolUsers?: Profile[] })[]
   onClose: () => void
   onCancelBooking?: (bookingId: number) => void
   currentUserId?: string
@@ -162,10 +162,23 @@ export default function DayBookingsList({
                               <p className="text-xs text-gray-500 mt-0.5">
                                 {booking.status === 'pending' ? 'Pendiente de confirmación' : 'Confirmada'}
                               </p>
-                              {booking.carpoolUser && (
+                              {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
                                 <p className="text-xs text-orange-600 mt-1 flex items-center gap-1">
                                   <Users className="w-3 h-3" strokeWidth={2.5} />
-                                  Con {booking.carpoolUser.full_name || booking.carpoolUser.email?.split('@')[0] || 'otro usuario'}
+                                  <span>
+                                    {(() => {
+                                      const names = booking.carpoolUsers!.map(
+                                        (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
+                                      )
+                                      if (names.length === 1) {
+                                        return `Con ${names[0]}`
+                                      }
+                                      if (names.length === 2) {
+                                        return `Con ${names[0]} y ${names[1]}`
+                                      }
+                                      return `Con ${names[0]} y ${names.length - 1} más`
+                                    })()}
+                                  </span>
                                 </p>
                               )}
                             </div>
