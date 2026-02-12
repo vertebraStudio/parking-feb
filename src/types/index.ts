@@ -51,6 +51,13 @@ export interface SpotBlock {
   created_at: string
 }
 
+export interface WeekUnlock {
+  id: number
+  week_monday: string // Fecha del lunes de la semana (YYYY-MM-DD)
+  unlocked_by: string // ID del admin que desbloqueó
+  created_at: string
+}
+
 export type NotificationType = 'booking_confirmed'
 
 export interface AppNotification {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw, Lock, Unlock } from 'lucide-react'
 import { format, addDays, subDays, isBefore, startOfDay, startOfWeek } from 'date-fns'
 import { es } from 'date-fns/locale'
 import ParkingMap from '../components/ParkingMap'
@@ -40,10 +40,14 @@ export default function MapPage() {
     const today = new Date()
     return startOfWeek(today, { weekStartsOn: 1 })
   })
+  const [unlockedWeeks, setUnlockedWeeks] = useState<Set<string>>(new Set()) // Set de fechas de lunes (YYYY-MM-DD) desbloqueadas
+  const [togglingWeekLock, setTogglingWeekLock] = useState(false)
+  const [showUnlockWeekModal, setShowUnlockWeekModal] = useState(false)
 
   useEffect(() => {
     loadUser()
     loadWeekBookings()
+    loadUnlockedWeeks()
 
     // Escuchar cambios en la autenticación
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -73,6 +77,23 @@ export default function MapPage() {
       )
       .subscribe()
 
+    // Suscripción a cambios en tiempo real en la tabla week_unlocks
+    const weekUnlocksChannel = supabase
+      .channel('week-unlocks-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'week_unlocks',
+        },
+        () => {
+          // Recargar semanas desbloqueadas cuando hay cambios
+          loadUnlockedWeeks()
+        }
+      )
+      .subscribe()
+
     // Recargar cuando la página recupera el foco (por si se canceló una reserva en otra pestaña/página)
     const handleFocus = () => {
       loadWeekBookings()
@@ -82,6 +103,7 @@ export default function MapPage() {
     return () => {
       subscription.unsubscribe()
       supabase.removeChannel(bookingsChannel)
+      supabase.removeChannel(weekUnlocksChannel)
       window.removeEventListener('focus', handleFocus)
     }
   }, [])
@@ -91,6 +113,11 @@ export default function MapPage() {
       loadUserBookings()
     }
   }, [user])
+
+  // Recargar semanas desbloqueadas cuando cambia la semana seleccionada
+  useEffect(() => {
+    loadUnlockedWeeks()
+  }, [selectedWeekMonday])
 
   useEffect(() => {
     selectedDateRef.current = selectedDate
@@ -502,6 +529,168 @@ export default function MapPage() {
     }
   }
 
+  // Cargar semanas desbloqueadas
+  const loadUnlockedWeeks = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('week_unlocks')
+        .select('week_monday')
+
+      if (error) {
+        // Si la tabla no existe, simplemente no hay semanas desbloqueadas (excepto la actual)
+        if (error.message?.includes('does not exist') || error.message?.includes('schema cache')) {
+          console.warn('Tabla week_unlocks no existe. Ejecuta create_week_unlocks.sql en Supabase.')
+          // La semana actual está desbloqueada por defecto
+          const currentWeekMonday = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+          setUnlockedWeeks(new Set([currentWeekMonday]))
+        } else {
+          console.error('Error cargando semanas desbloqueadas:', error)
+          // La semana actual está desbloqueada por defecto
+          const currentWeekMonday = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+          setUnlockedWeeks(new Set([currentWeekMonday]))
+        }
+      } else {
+        const weekMondays = new Set((data || []).map((w: { week_monday: string }) => w.week_monday))
+        // Asegurar que la semana actual siempre esté desbloqueada
+        const currentWeekMonday = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+        weekMondays.add(currentWeekMonday)
+        setUnlockedWeeks(weekMondays)
+      }
+    } catch (error) {
+      console.error('Error loading unlocked weeks:', error)
+      // La semana actual está desbloqueada por defecto
+      const currentWeekMonday = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+      setUnlockedWeeks(new Set([currentWeekMonday]))
+    }
+  }
+
+  // Verificar si una semana está desbloqueada
+  const isWeekUnlocked = (weekMonday: Date): boolean => {
+    const weekMondayString = format(weekMonday, 'yyyy-MM-dd')
+    // La semana actual siempre está desbloqueada
+    const currentWeekMonday = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+    if (weekMondayString === currentWeekMonday) {
+      return true
+    }
+    return unlockedWeeks.has(weekMondayString)
+  }
+
+  // Bloquear/desbloquear semana (solo admin)
+  const toggleWeekLock = () => {
+    if (!user || user.role !== 'admin') return
+
+    const weekMondayString = format(selectedWeekMonday, 'yyyy-MM-dd')
+    const currentWeekMonday = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+
+    // No permitir bloquear la semana actual
+    if (weekMondayString === currentWeekMonday) {
+      setError('No se puede bloquear la semana en curso')
+      return
+    }
+
+    const isCurrentlyUnlocked = unlockedWeeks.has(weekMondayString)
+
+    if (isCurrentlyUnlocked) {
+      // Bloquear directamente sin modal
+      handleLockWeek()
+    } else {
+      // Desbloquear: mostrar modal de confirmación
+      setShowUnlockWeekModal(true)
+    }
+  }
+
+  // Función para bloquear semana (sin modal)
+  const handleLockWeek = async () => {
+    if (!user || user.role !== 'admin') return
+
+    const weekMondayString = format(selectedWeekMonday, 'yyyy-MM-dd')
+    const currentWeekMonday = format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd')
+
+    // No permitir bloquear la semana actual
+    if (weekMondayString === currentWeekMonday) {
+      setError('No se puede bloquear la semana en curso')
+      return
+    }
+
+    setTogglingWeekLock(true)
+    setError(null)
+
+    try {
+      // Bloquear: eliminar de week_unlocks
+      const { error: deleteError } = await supabase
+        .from('week_unlocks')
+        .delete()
+        .eq('week_monday', weekMondayString)
+
+      if (deleteError) {
+        throw deleteError
+      }
+
+      // Actualizar estado local
+      const newUnlockedWeeks = new Set(unlockedWeeks)
+      newUnlockedWeeks.delete(weekMondayString)
+      setUnlockedWeeks(newUnlockedWeeks)
+    } catch (err: any) {
+      console.error('Error locking week:', err)
+      setError(err.message || 'Error al bloquear la semana')
+    } finally {
+      setTogglingWeekLock(false)
+    }
+  }
+
+  // Función para desbloquear semana (después de confirmación en modal)
+  const handleUnlockWeek = async () => {
+    if (!user || user.role !== 'admin') return
+
+    const weekMondayString = format(selectedWeekMonday, 'yyyy-MM-dd')
+    
+    setTogglingWeekLock(true)
+    setError(null)
+    setShowUnlockWeekModal(false)
+
+    try {
+      // Desbloquear: insertar en week_unlocks
+      const { error: insertError } = await supabase
+        .from('week_unlocks')
+        .insert({
+          week_monday: weekMondayString,
+          unlocked_by: user.id,
+        })
+
+      if (insertError) {
+        throw insertError
+      }
+
+      // Actualizar estado local
+      const newUnlockedWeeks = new Set(unlockedWeeks)
+      newUnlockedWeeks.add(weekMondayString)
+      setUnlockedWeeks(newUnlockedWeeks)
+
+      // Enviar notificaciones push a todos los usuarios
+      console.log('📤 Enviando notificaciones push para semana desbloqueada:', weekMondayString)
+      try {
+        const { data: notifyData, error: notifyError } = await supabase.functions.invoke('notify-week-unlocked', {
+          body: { weekMonday: weekMondayString },
+        })
+
+        if (notifyError) {
+          console.error('❌ Error enviando notificaciones push:', notifyError)
+          // No lanzar error, solo loguear - el desbloqueo ya fue exitoso
+        } else {
+          console.log('✅ Notificaciones push enviadas:', notifyData)
+        }
+      } catch (notifyErr: any) {
+        console.error('❌ Error invocando función de notificaciones:', notifyErr)
+        // No lanzar error, solo loguear - el desbloqueo ya fue exitoso
+      }
+    } catch (err: any) {
+      console.error('Error unlocking week:', err)
+      setError(err.message || 'Error al desbloquear la semana')
+    } finally {
+      setTogglingWeekLock(false)
+    }
+  }
+
   const handleSpotSelect = async (spotId: number) => {
     if (!user) {
       setError('Debes iniciar sesión para reservar')
@@ -782,6 +971,14 @@ export default function MapPage() {
       return
     }
 
+    // Verificar si la semana está desbloqueada
+    const dateObj = new Date(date)
+    const weekMonday = startOfWeek(dateObj, { weekStartsOn: 1 })
+    if (!isWeekUnlocked(weekMonday)) {
+      setError('Esta semana aún no está disponible para reservas. El administrador debe desbloquearla primero.')
+      return
+    }
+
     // Verificar si ya tiene reserva para este día
     const dateString = format(new Date(date), 'yyyy-MM-dd')
     const hasBooking = userBookings.some(
@@ -934,6 +1131,14 @@ export default function MapPage() {
 
     if (!user.is_verified) {
       setError('Tu cuenta debe estar verificada para unirte a la lista de espera')
+      return
+    }
+
+    // Verificar si la semana está desbloqueada
+    const dateObj = new Date(date)
+    const weekMonday = startOfWeek(dateObj, { weekStartsOn: 1 })
+    if (!isWeekUnlocked(weekMonday)) {
+      setError('Esta semana aún no está disponible para reservas. El administrador debe desbloquearla primero.')
       return
     }
 
@@ -1215,6 +1420,7 @@ export default function MapPage() {
     await Promise.all([
       loadWeekBookings(),
       loadUserBookings(),
+      loadUnlockedWeeks(),
     ])
   }
 
@@ -1289,7 +1495,7 @@ export default function MapPage() {
         </div>
       )}
       {/* Título */}
-      <div className="mb-4 lg:mb-6">
+      <div className="mb-4 lg:mb-6 flex items-center justify-between">
         <h1 
           className="text-3xl lg:text-4xl font-semibold text-gray-900 tracking-tight"
           style={{ 
@@ -1299,6 +1505,24 @@ export default function MapPage() {
         >
           Parking
         </h1>
+        {user?.role === 'admin' && (
+          <button
+            onClick={toggleWeekLock}
+            disabled={togglingWeekLock}
+            className={`flex-shrink-0 p-2 rounded-[12px] transition-all duration-200 active:scale-95 border flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed ${
+              isWeekUnlocked(selectedWeekMonday)
+                ? 'bg-[#FF9500] border-[#FF9500] hover:bg-[#FF9500]/90 text-white'
+                : 'bg-gray-200 border-gray-300 hover:bg-gray-300 text-gray-700'
+            }`}
+            title={isWeekUnlocked(selectedWeekMonday) ? 'Bloquear semana' : 'Desbloquear semana'}
+          >
+            {isWeekUnlocked(selectedWeekMonday) ? (
+              <Unlock className="h-5 w-5" strokeWidth={2.5} />
+            ) : (
+              <Lock className="h-5 w-5" strokeWidth={2.5} />
+            )}
+          </button>
+        )}
       </div>
 
       {/* Selector de semana */}
@@ -1354,6 +1578,7 @@ export default function MapPage() {
         onRequestBooking={handleRequestBooking}
         onJoinWaitlist={handleJoinWaitlist}
         spotBlocks={spotBlocks}
+        isWeekLocked={!isWeekUnlocked(selectedWeekMonday)}
       />
 
       {/* Lista de reservas del día seleccionado */}
@@ -1485,6 +1710,19 @@ export default function MapPage() {
         confirmText={requestedDate ? "Solicitar" : "Confirmar"}
         cancelText="Cancelar"
         loading={reserving}
+      />
+
+      {/* Modal de confirmación para desbloquear semana */}
+      <ConfirmModal
+        isOpen={showUnlockWeekModal}
+        onClose={() => setShowUnlockWeekModal(false)}
+        onConfirm={handleUnlockWeek}
+        title="Desbloquear Semana"
+        message={`¿Deseas desbloquear la semana del ${format(selectedWeekMonday, 'd MMM', { locale: es })} al ${format(addDays(selectedWeekMonday, 4), 'd MMM', { locale: es })}? Los usuarios podrán realizar reservas para esta semana.`}
+        confirmText="Desbloquear"
+        cancelText="Cancelar"
+        loading={togglingWeekLock}
+        confirmButtonClass="bg-[#FF9500] hover:bg-[#FF9500]/90"
       />
     </div>
   )

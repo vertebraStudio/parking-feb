@@ -13,6 +13,7 @@ interface WeekDaysViewProps {
   onRequestBooking: (date: string) => void
   onJoinWaitlist?: (date: string) => void
   spotBlocks?: SpotBlock[]
+  isWeekLocked?: boolean // Si la semana está bloqueada
 }
 
 const MAX_SPOTS_PER_DAY = 8
@@ -26,6 +27,7 @@ export default function WeekDaysView({
   onRequestBooking,
   onJoinWaitlist,
   spotBlocks = [],
+  isWeekLocked = false,
 }: WeekDaysViewProps) {
   // Obtener los días de la semana seleccionada (lunes a viernes)
   const getWeekDays = (): Date[] => {
@@ -120,6 +122,7 @@ export default function WeekDaysView({
         const dayName = format(day, 'EEEE', { locale: es })
         const isToday = isSameDay(day, new Date())
         const isPast = isPastDate(day)
+        const isDisabled = isPast || isWeekLocked // Días pasados o semana bloqueada
         const bookingsCount = getBookingsCount(dateString)
         const blockedSpotsCount = getBlockedSpotsCount(dateString)
         const availableSpots = getAvailableSpots(dateString)
@@ -134,24 +137,24 @@ export default function WeekDaysView({
             key={dateString}
             className={cn(
               "bg-white rounded-[20px] border p-4 transition-all duration-200",
-              isPast && "opacity-60 grayscale",
+              isDisabled && "opacity-60 grayscale",
               hasBooking && bookingStatus === 'confirmed' && "border-orange-500 bg-orange-50",
               hasBooking && bookingStatus === 'pending' && "border-amber-400 bg-amber-50",
               hasBooking && bookingStatus === 'waitlist' && "border-purple-400 bg-purple-50",
-              !hasBooking && !isPast && "border-gray-200 hover:border-gray-300 cursor-pointer",
+              !hasBooking && !isDisabled && "border-gray-200 hover:border-gray-300 cursor-pointer",
               full && !hasBooking && "border-red-200 bg-red-50"
             )}
-            onClick={() => !isPast && onDayClick(dateString)}
+            onClick={() => !isDisabled && onDayClick(dateString)}
           >
             <div className="flex items-center justify-between">
               {/* Información del día */}
               <div className="flex items-center gap-3 flex-1">
                 <div className="flex-shrink-0">
-                  {hasBooking && bookingStatus === 'waitlist' ? (
+                      {hasBooking && bookingStatus === 'waitlist' ? (
                     <Clock 
                       className={cn(
                         "w-6 h-6",
-                        isPast ? "text-gray-400" : "text-purple-600"
+                        isDisabled ? "text-gray-400" : "text-purple-600"
                       )} 
                       strokeWidth={2.5} 
                     />
@@ -159,7 +162,7 @@ export default function WeekDaysView({
                     <Calendar 
                       className={cn(
                         "w-6 h-6",
-                        isPast ? "text-gray-400" :
+                        isDisabled ? "text-gray-400" :
                         hasBooking && bookingStatus === 'confirmed' ? "text-orange-600" :
                         hasBooking && bookingStatus === 'pending' ? "text-amber-600" :
                         full ? "text-red-500" :
@@ -174,7 +177,7 @@ export default function WeekDaysView({
                     <h3 
                       className={cn(
                         "text-lg font-bold",
-                        isPast ? "text-gray-500" :
+                        isDisabled ? "text-gray-500" :
                         hasBooking ? "text-gray-900" :
                         "text-gray-900"
                       )}
@@ -212,7 +215,7 @@ export default function WeekDaysView({
                     <Users 
                       className={cn(
                         "w-4 h-4",
-                        isPast ? "text-gray-400" :
+                        isDisabled ? "text-gray-400" :
                         full ? "text-red-500" :
                         "text-gray-600"
                       )} 
@@ -221,7 +224,7 @@ export default function WeekDaysView({
                     <span 
                       className={cn(
                         "text-sm font-semibold",
-                        isPast ? "text-gray-500" :
+                        isDisabled ? "text-gray-500" :
                         full ? "text-red-600" :
                         "text-gray-700"
                       )}
@@ -261,7 +264,7 @@ export default function WeekDaysView({
                 </div>
 
                 {/* Botón de acción o flecha */}
-                {!isPast && (
+                {!isDisabled && (
                   <div className="flex-shrink-0">
                     {hasBooking ? (
                       <ChevronRight 

@@ -20,3 +20,7 @@ verify_jwt = false
 # Permitir que el panel de administración llame a esta función directamente
 # (la función usa SERVICE_ROLE_KEY internamente para borrar en auth.users)
 verify_jwt = false
+
+[functions.notify-week-unlocked]
+# Permitir llamadas desde el frontend sin JWT (usa SERVICE_ROLE_KEY internamente)
+verify_jwt = false
