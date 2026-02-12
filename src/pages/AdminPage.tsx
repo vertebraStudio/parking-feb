@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3, Eye, EyeOff, Trash2 } from 'lucide-react'
+import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3, Eye, EyeOff, Trash2, Search } from 'lucide-react'
 import { format, startOfWeek, addDays, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '../lib/supabase'
@@ -12,6 +12,27 @@ interface BookingWithSpot extends Booking {
   user?: Profile
   // Compañeros de coche (pueden ser varios)
   carpoolUsers?: Profile[]
+}
+
+// Helpers para avatares tipo "FaceHash"
+function getFaceHashColor(key: string) {
+  const colors = ['#FF9500', '#34C759', '#0A84FF', '#AF52DE', '#FF2D55', '#FF9F0A', '#5AC8FA', '#FFCC00']
+  let hash = 0
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0
+  }
+  const index = Math.abs(hash) % colors.length
+  return colors[index]
+}
+
+function getProfileInitials(profile: Profile) {
+  const base = (profile.full_name && profile.full_name.trim()) || profile.email || ''
+  if (!base) return '?'
+  const parts = base.split(/\s+/).filter(Boolean)
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase()
+  }
+  return (parts[0][0] + parts[1][0]).toUpperCase()
 }
 
 export default function AdminPage() {
@@ -47,6 +68,7 @@ export default function AdminPage() {
   const [selectedDayForList, setSelectedDayForList] = useState<number | null>(null) // Día seleccionado para ver lista (0-4: L-V, null: todas)
   const [spotsToBlock, setSpotsToBlock] = useState<number>(0) // Número de plazas a bloquear
   const [showConfirmedBookings, setShowConfirmedBookings] = useState<boolean>(false) // Mostrar reservas confirmadas
+  const [userSearch, setUserSearch] = useState('') // Buscador de usuarios en pestaña de usuarios
   
   // Estados para modales
   const [showBlockModal, setShowBlockModal] = useState(false)
@@ -1164,6 +1186,23 @@ export default function AdminPage() {
   const unverifiedUsers = profiles.filter(p => !p.is_verified && p.role === 'user')
   const verifiedUsers = profiles.filter(p => p.is_verified || p.role === 'admin')
 
+  const searchTerm = userSearch.trim().toLowerCase()
+  const filteredUnverifiedUsers = searchTerm
+    ? unverifiedUsers.filter((p) => {
+        const name = (p.full_name || '').toLowerCase()
+        const email = (p.email || '').toLowerCase()
+        return name.includes(searchTerm) || email.includes(searchTerm)
+      })
+    : unverifiedUsers
+
+  const filteredVerifiedUsers = searchTerm
+    ? verifiedUsers.filter((p) => {
+        const name = (p.full_name || '').toLowerCase()
+        const email = (p.email || '').toLowerCase()
+        return name.includes(searchTerm) || email.includes(searchTerm)
+      })
+    : verifiedUsers
+
   return (
     <div 
       className="p-4 lg:p-6 pb-24 lg:pb-8 min-h-screen bg-white"
@@ -1181,7 +1220,7 @@ export default function AdminPage() {
         </h1>
         {/* Contadores rápidos - solo desktop */}
         <div className="hidden lg:flex items-center gap-4 mt-3 lg:mt-0">
-          {unverifiedUsers.length > 0 && (
+          {filteredUnverifiedUsers.length > 0 && (
             <button
               onClick={() => { setActiveTab('users'); setError(null) }}
               className="flex items-center gap-2 px-4 py-2 rounded-[14px] border border-orange-200 bg-orange-50 hover:bg-orange-100 transition-colors"
@@ -1301,6 +1340,28 @@ export default function AdminPage() {
       {/* Tab Content */}
       {activeTab === 'users' && (
         <div className="space-y-6">
+          {/* Buscador de usuarios (solo barra) */}
+          <div className="relative">
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              <Search className="h-4 w-4 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              placeholder="Buscar por nombre o email..."
+              className="w-full rounded-[14px] border border-gray-300 bg-white py-2.5 pl-9 pr-9 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#FF9500] focus:border-[#FF9500] transition-colors"
+            />
+            {userSearch && (
+              <button
+                type="button"
+                onClick={() => setUserSearch('')}
+                className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600"
+              >
+                <span className="text-xs font-semibold">Limpiar</span>
+              </button>
+            )}
+          </div>
           {/* Usuarios sin verificar */}
           {unverifiedUsers.length > 0 && (
             <div>
@@ -1311,19 +1372,25 @@ export default function AdminPage() {
                   letterSpacing: '-0.2px'
                 }}
               >
-                Usuarios Pendientes de Verificación ({unverifiedUsers.length})
+                Usuarios Pendientes de Verificación ({filteredUnverifiedUsers.length})
               </h2>
               <div className="space-y-3 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:space-y-0">
-                {unverifiedUsers.map((profile) => {
-                  const initials = (profile.full_name || profile.email || '?').charAt(0).toUpperCase()
+                {filteredUnverifiedUsers.map((profile) => {
+                  const initials = getProfileInitials(profile)
+                  const color = getFaceHashColor(profile.id || profile.email || initials)
                   return (
                   <div
                     key={profile.id}
                     className="rounded-[20px] p-5 transition-all duration-200 bg-white border border-orange-200 hover:shadow-md"
                   >
                     <div className="flex items-start gap-3">
-                      {/* Avatar */}
-                      <div className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white" style={{ backgroundColor: '#FF9500' }}>
+                      {/* Avatar FaceHash */}
+                      <div
+                        className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-sm"
+                        style={{
+                          background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
+                        }}
+                      >
                         {initials}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -1368,12 +1435,13 @@ export default function AdminPage() {
                 letterSpacing: '-0.2px'
               }}
             >
-              Usuarios Verificados ({verifiedUsers.length})
+              Usuarios Verificados ({filteredVerifiedUsers.length})
             </h2>
             <div className="space-y-2 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-4 lg:space-y-0">
-              {verifiedUsers.map((profile) => {
-                const initials = (profile.full_name || profile.email || '?').charAt(0).toUpperCase()
+              {filteredVerifiedUsers.map((profile) => {
                 const isAdmin = profile.role === 'admin'
+                const initials = getProfileInitials(profile)
+                const color = getFaceHashColor(profile.id || profile.email || initials)
                 return (
                 <div
                   key={profile.id}
@@ -1381,10 +1449,12 @@ export default function AdminPage() {
                   className="rounded-[20px] p-4 transition-all duration-200 bg-white border border-gray-200 hover:shadow-md hover:border-gray-300 cursor-pointer group"
                 >
                   <div className="flex items-center gap-3">
-                    {/* Avatar */}
+                    {/* Avatar FaceHash */}
                     <div
-                      className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-sm font-bold text-white"
-                      style={{ backgroundColor: isAdmin ? '#FF9500' : '#8E8E93' }}
+                      className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-sm"
+                      style={{
+                        background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
+                      }}
                     >
                       {initials}
                     </div>
@@ -2186,11 +2256,11 @@ export default function AdminPage() {
               userTotals.set(userId, userBookings.size)
             })
             
-            // Ordenar usuarios por total de plazas (descendente)
+            // Ordenar usuarios alfabéticamente por nombre completo o email
             const sortedUsers = [...usersToShow].sort((a, b) => {
-              const totalA = userTotals.get(a.id) || 0
-              const totalB = userTotals.get(b.id) || 0
-              return totalB - totalA
+              const nameA = (a.full_name || a.email || '').toLowerCase().trim()
+              const nameB = (b.full_name || b.email || '').toLowerCase().trim()
+              return nameA.localeCompare(nameB, 'es', { sensitivity: 'base' })
             })
             
             // Calcular total general
@@ -2219,7 +2289,7 @@ export default function AdminPage() {
                   <table className="w-full border-collapse">
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="px-4 py-3 lg:py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider sticky left-0 bg-gray-50 z-10 lg:min-w-[200px]">
+                        <th className="px-4 py-3 lg:py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider sticky left-0 bg-gray-50 lg:min-w-[200px]">
                           Usuario
                         </th>
                         {weekDays.map((day, index) => (
@@ -2251,10 +2321,15 @@ export default function AdminPage() {
                               userIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                             }`}
                           >
-                            <td className="px-4 py-3 lg:py-4 text-sm font-medium text-gray-900 sticky left-0 bg-inherit z-10">
+                            <td className="px-4 py-3 lg:py-4 text-sm font-medium text-gray-900 sticky left-0 bg-inherit">
                               <span className="lg:flex lg:items-center lg:gap-2">
-                                <span className="hidden lg:inline-flex w-7 h-7 rounded-full items-center justify-center text-[10px] font-bold text-white flex-shrink-0" style={{ backgroundColor: '#8E8E93' }}>
-                                  {userName.charAt(0).toUpperCase()}
+                                <span 
+                                  className="hidden lg:inline-flex w-7 h-7 rounded-full items-center justify-center text-[10px] font-semibold text-white flex-shrink-0 shadow-sm"
+                                  style={{
+                                    background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${getFaceHashColor(user.id || user.email || userName)}`,
+                                  }}
+                                >
+                                  {getProfileInitials(user)}
                                 </span>
                                 {userName}
                               </span>
@@ -2290,7 +2365,7 @@ export default function AdminPage() {
                       })}
                       {/* Fila de totales */}
                       <tr className="bg-gray-100 border-t-2 border-gray-300">
-                        <td className="px-4 py-3 text-sm font-bold text-gray-900 sticky left-0 bg-gray-100 z-10">
+                        <td className="px-4 py-3 text-sm font-bold text-gray-900 sticky left-0 bg-gray-100">
                           Total
                         </td>
                         {weekDays.map((day, dayIndex) => {

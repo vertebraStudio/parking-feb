@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { Bell, Car, Calendar, Settings, User } from 'lucide-react'
+import { Bell, Car, Calendar, Settings, User, LogOut } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { supabase } from '../lib/supabase'
 import { Profile } from '../types'
@@ -227,6 +227,15 @@ export default function Layout() {
     }
   }
 
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut()
+      navigate('/login')
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error)
+    }
+  }
+
   const allNavItems = [
     { path: '/', icon: Car, label: 'Parking' },
     { path: '/bookings', icon: Calendar, label: 'Mis Reservas' },
@@ -319,7 +328,13 @@ export default function Layout() {
 
         {/* Sidebar Footer */}
         <div className="p-4 border-t border-gray-100">
-          <p className="text-xs text-gray-400 text-center">FEB Parking v1.0</p>
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-[14px] text-left transition-all duration-200 text-gray-600 hover:bg-red-50 hover:text-red-600 font-medium"
+          >
+            <LogOut size={18} strokeWidth={2} />
+            <span className="text-sm">Cerrar sesión</span>
+          </button>
         </div>
       </aside>
 
