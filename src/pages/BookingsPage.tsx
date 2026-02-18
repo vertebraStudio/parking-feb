@@ -119,9 +119,26 @@ export default function BookingsPage() {
         return
       }
 
+      // Normalizar estado legacy 'pending' → 'waitlist'
+      const pendingIds = (bookingsData || []).filter((b: any) => b.status === 'pending').map((b: any) => b.id)
+      if (pendingIds.length > 0) {
+        console.warn('⚠️ Migrando reservas legacy pending → waitlist (BookingsPage):', pendingIds.length)
+        supabase
+          .from('bookings')
+          .update({ status: 'waitlist', spot_id: null })
+          .in('id', pendingIds)
+          .then(({ error }) => {
+            if (error) console.error('Error migrating pending → waitlist (BookingsPage):', error)
+          })
+      }
+
+      const normalizedBookingsData = (bookingsData || []).map((b: any) =>
+        b.status === 'pending' ? { ...b, status: 'waitlist', spot_id: null } : b
+      )
+
       // Cargar información de las plazas
-      if (bookingsData && bookingsData.length > 0) {
-        const spotIds = [...new Set(bookingsData.map(b => b.spot_id))]
+      if (normalizedBookingsData && normalizedBookingsData.length > 0) {
+        const spotIds = [...new Set(normalizedBookingsData.map((b: any) => b.spot_id).filter((id: any) => id !== null))]
         const { data: spotsData, error: spotsError } = await supabase
           .from('parking_spots')
           .select('*')
@@ -157,7 +174,7 @@ export default function BookingsPage() {
         }
 
         // Cargar relaciones de carpooling múltiple desde booking_carpool_users
-        const bookingIds = bookingsData.map(b => b.id)
+        const bookingIds = normalizedBookingsData.map((b: any) => b.id)
         const { data: carpoolLinks, error: carpoolLinksError } = await supabase
           .from('booking_carpool_users')
           .select('*')
@@ -168,7 +185,7 @@ export default function BookingsPage() {
         }
 
         // IDs de compañeros de coche (incluyendo columna antigua y nueva tabla)
-        const legacyCarpoolIds = bookingsData
+        const legacyCarpoolIds = normalizedBookingsData
           .map(b => b.carpool_with_user_id)
           .filter((id): id is string => id !== null)
 
@@ -190,7 +207,7 @@ export default function BookingsPage() {
         }
 
         // Combinar reservas con información de plazas y carpooling (múltiples compañeros)
-        const bookingsWithSpots: BookingWithSpot[] = bookingsData.map(booking => {
+        const bookingsWithSpots: BookingWithSpot[] = normalizedBookingsData.map((booking: any) => {
           // Todos los enlaces de carpool para esta reserva
           const linksForBooking = (carpoolLinks || []).filter(link => link.booking_id === booking.id)
 
@@ -248,12 +265,32 @@ export default function BookingsPage() {
 
     setCancelling(true)
     try {
+      const wasConfirmed = bookingToCancel.status === 'confirmed'
+
       const { error: updateError } = await supabase
         .from('bookings')
         .update({ status: 'cancelled' })
         .eq('id', bookingToCancel.id)
 
       if (updateError) throw updateError
+
+      // Notificar a admins solo si era una reserva confirmada
+      if (wasConfirmed) {
+        try {
+          console.log('📤 Notificando cancelación de reserva confirmada (BookingsPage) bookingId:', bookingToCancel.id)
+          const { data: notifyData, error: notifyError } = await supabase.functions.invoke('notify-booking-cancelled', {
+            body: { bookingId: bookingToCancel.id },
+          })
+
+          if (notifyError) {
+            console.error('❌ Error enviando notificación de cancelación (BookingsPage):', notifyError)
+          } else {
+            console.log('✅ Notificación de cancelación enviada (BookingsPage):', notifyData)
+          }
+        } catch (notifyErr: any) {
+          console.error('❌ Error invocando notify-booking-cancelled (BookingsPage):', notifyErr)
+        }
+      }
 
       // Recargar reservas
       await loadBookings()
@@ -510,12 +547,12 @@ export default function BookingsPage() {
   }
 
   // Obtener el estado de la reserva para un día específico
-  const getBookingStatusOnDate = (dateString: string): 'confirmed' | 'pending' | 'waitlist' | null => {
+  const getBookingStatusOnDate = (dateString: string): 'confirmed' | 'waitlist' | null => {
     const booking = bookings.find(b => b.date === dateString)
     if (!booking) return null
     if (booking.status === 'confirmed') return 'confirmed'
-    if (booking.status === 'waitlist') return 'waitlist'
-    return 'pending'
+    if (booking.status === 'waitlist' || (booking as any).status === 'pending') return 'waitlist'
+    return null
   }
 
   const formatDateDisplay = (dateString: string) => {
@@ -677,13 +714,6 @@ export default function BookingsPage() {
               textColor = '#FFFFFF'
               dayNameColor = '#FFFFFF'
               boxShadow = '0 2px 8px rgba(52, 199, 89, 0.3)'
-            } else if (bookingStatus === 'pending') {
-              // Pendiente: naranja
-              backgroundColor = '#FF9500'
-              borderColor = '#FF9500'
-              textColor = '#FFFFFF'
-              dayNameColor = '#FFFFFF'
-              boxShadow = '0 2px 8px rgba(255, 149, 0, 0.3)'
             } else if (bookingStatus === 'waitlist') {
               // Lista de espera: morado
               backgroundColor = '#AF52DE'
@@ -872,125 +902,7 @@ export default function BookingsPage() {
             </div>
           )}
 
-          {/* Reservas Pendientes */}
-          {bookings.filter(b => b.status === 'pending').length > 0 && (
-            <div>
-              <div className="flex items-center gap-2 mb-3">
-                <Clock className="w-4 h-4" style={{ color: '#FF9500' }} strokeWidth={2.5} />
-                <h2 
-                  className="text-base font-bold text-gray-900"
-                  style={{ 
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-                    letterSpacing: '-0.2px'
-                  }}
-                >
-                  Reservas Pendientes ({bookings.filter(b => b.status === 'pending').length})
-                </h2>
-              </div>
-              <div className="space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
-                {bookings
-                  .filter(b => b.status === 'pending')
-                  .map((booking) => (
-                    <div
-                      key={booking.id}
-                      className="rounded-[16px] p-3 transition-all duration-200 active:scale-[0.98] bg-white border border-gray-200"
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          {getSpotLabel(booking.spot) && (
-                            <div className="flex items-center gap-1.5 mb-1.5">
-                              <Car className="w-4 h-4" style={{ color: '#FF9500' }} strokeWidth={2.5} />
-                              <h3 
-                                className="text-sm font-bold text-gray-900"
-                                style={{ 
-                                  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-                                }}
-                              >
-                                {getSpotLabel(booking.spot)}
-                              </h3>
-                            </div>
-                          )}
-                          <div className="flex items-center gap-2 flex-wrap text-gray-900">
-                            <span className="text-base font-bold">{formatDate(booking.date)}</span>
-                            {(() => {
-                              const date = new Date(booking.date)
-                              const today = new Date()
-                              today.setHours(0, 0, 0, 0)
-                              const tomorrow = new Date(today)
-                              tomorrow.setDate(tomorrow.getDate() + 1)
-                              const bookingDate = new Date(date)
-                              bookingDate.setHours(0, 0, 0, 0)
-                              
-                              if (bookingDate.getTime() === today.getTime()) {
-                                return (
-                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-green-100 text-green-700">
-                                    Hoy
-                                  </span>
-                                )
-                              } else if (bookingDate.getTime() === tomorrow.getTime()) {
-                                return (
-                                  <span className="px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-blue-100 text-blue-700">
-                                    Mañana
-                                  </span>
-                                )
-                              }
-                              return null
-                            })()}
-                          </div>
-                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
-                            <div className="flex items-center gap-1.5 text-orange-600 mt-1.5">
-                              <Users className="w-3.5 h-3.5" strokeWidth={2.5} />
-                              <span className="text-xs font-medium">
-                                {(() => {
-                                  const names = booking.carpoolUsers!.map(
-                                    (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
-                                  )
-                                  if (names.length === 1) {
-                                    return `Con ${names[0]}`
-                                  }
-                                  if (names.length === 2) {
-                                    return `Con ${names[0]} y ${names[1]}`
-                                  }
-                                  return `Con ${names[0]} y ${names.length - 1} más`
-                                })()}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                        {getStatusBadge(booking.status)}
-                      </div>
-
-                      <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-gray-100">
-                        <button
-                          onClick={() => handleOpenCarpoolModal(booking)}
-                          className="px-2.5 py-1 rounded-[6px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1 text-gray-700 hover:bg-gray-50"
-                        >
-                          <Edit2 className="w-3 h-3" strokeWidth={2} />
-                          {booking.carpoolUsers && booking.carpoolUsers.length > 0 ? 'Cambiar' : 'Añadir'} compañero
-                        </button>
-                        {isExecutiveBooking(booking) ? (
-                          <button
-                            onClick={() => handleReleaseSpot(booking)}
-                            className="ml-auto px-2.5 py-1 rounded-[6px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1 text-blue-600 hover:bg-blue-50"
-                          >
-                            <X className="w-3 h-3" strokeWidth={2} />
-                            Liberar
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleCancelBooking(booking)}
-                            className="ml-auto px-2.5 py-1 rounded-[6px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1 text-red-600 hover:bg-red-50"
-                          >
-                            <X className="w-3 h-3" strokeWidth={2} />
-                            Cancelar
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
+          {/* El estado 'pending' ya no se usa */}
 
           {/* Reservas en Lista de Espera */}
           {bookings.filter(b => b.status === 'waitlist').length > 0 && (

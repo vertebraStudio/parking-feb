@@ -10,7 +10,7 @@ export interface Profile {
   updated_at: string
 }
 
-export type BookingStatus = 'confirmed' | 'pending' | 'cancelled' | 'waitlist'
+export type BookingStatus = 'confirmed' | 'cancelled' | 'waitlist'
 
 export interface ParkingSpot {
   id: number

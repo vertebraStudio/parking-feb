@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { User, Clock, CheckCircle, X, UserPlus, Users } from 'lucide-react'
+import { User, CheckCircle, X, Users } from 'lucide-react'
 import { Booking, Profile } from '../types'
 import { cn } from '../lib/utils'
 import ConfirmModal from './ui/ConfirmModal'
@@ -25,25 +25,40 @@ export default function DayBookingsList({
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null)
   const [cancelling, setCancelling] = useState(false)
 
+  function getFaceHashColor(key: string) {
+    const colors = ['#FF9500', '#34C759', '#0A84FF', '#AF52DE', '#FF2D55', '#FF9F0A', '#5AC8FA', '#FFCC00']
+    let hash = 0
+    for (let i = 0; i < key.length; i++) {
+      hash = (hash * 31 + key.charCodeAt(i)) | 0
+    }
+    const index = Math.abs(hash) % colors.length
+    return colors[index]
+  }
+
+  function getProfileInitials(profile?: Profile) {
+    const base = (profile?.full_name && profile.full_name.trim()) || profile?.email || ''
+    if (!base) return '?'
+    const parts = base.split(/\s+/).filter(Boolean)
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+    return (parts[0][0] + parts[1][0]).toUpperCase()
+  }
+
   // Filtrar reservas para esta fecha (excluyendo canceladas)
   const allDayBookings = bookings.filter(
     b => b.date === date && b.status !== 'cancelled'
   )
 
-  // Separar reservas activas (confirmed/pending) de lista de espera
+  // Separar reservas activas (confirmed) de lista de espera
+  // Nota: 'pending' ya no se usa; si existe por datos legacy lo tratamos como 'waitlist'
   const activeBookings = allDayBookings.filter(
-    b => b.status === 'confirmed' || b.status === 'pending'
+    b => b.status === 'confirmed'
   )
   const waitlistBookings = allDayBookings.filter(
-    b => b.status === 'waitlist'
+    b => b.status === 'waitlist' || (b as any).status === 'pending'
   )
 
-  // Ordenar: confirmadas primero, luego pendientes
-  const sortedActiveBookings = [...activeBookings].sort((a, b) => {
-    if (a.status === 'confirmed' && b.status === 'pending') return -1
-    if (a.status === 'pending' && b.status === 'confirmed') return 1
-    return 0
-  })
+  // Ordenar: solo confirmadas (mantener orden estable)
+  const sortedActiveBookings = [...activeBookings]
 
   // Ordenar lista de espera por fecha de creación (primero en llegar, primero en salir)
   const sortedWaitlist = [...waitlistBookings].sort((a, b) => {
@@ -127,6 +142,8 @@ export default function DayBookingsList({
                     const userName = booking.user?.full_name || 
                                     booking.user?.email?.split('@')[0] || 
                                     'Usuario desconocido'
+                    const initials = getProfileInitials(booking.user)
+                    const color = getFaceHashColor(booking.user?.id || booking.user_id || booking.user?.email || initials)
                     
                     return (
                       <div
@@ -134,23 +151,22 @@ export default function DayBookingsList({
                         className={cn(
                           "p-4 rounded-[16px] border transition-all",
                           isCurrentUser && "bg-orange-50 border-orange-200",
-                          !isCurrentUser && booking.status === 'confirmed' && "bg-white border-gray-200",
-                          !isCurrentUser && booking.status === 'pending' && "bg-amber-50 border-amber-200"
+                          !isCurrentUser && "bg-white border-gray-200"
                         )}
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 flex-1 min-w-0">
-                            <div className={cn(
-                              "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
-                              isCurrentUser ? "bg-orange-500" :
-                              booking.status === 'confirmed' ? "bg-green-500" :
-                              "bg-amber-500"
-                            )}>
-                              {booking.status === 'pending' ? (
-                                <Clock className="w-5 h-5 text-white" strokeWidth={2.5} />
-                              ) : (
-                                <CheckCircle className="w-5 h-5 text-white" strokeWidth={2.5} />
+                            <div
+                              className={cn(
+                                "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold text-white shadow-sm ring-2 ring-offset-2 ring-offset-white",
+                                isCurrentUser ? "ring-orange-200" : "ring-gray-100",
+                                !isCurrentUser && "ring-green-200"
                               )}
+                              style={{
+                                background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
+                              }}
+                            >
+                              {initials}
                             </div>
                             <div className="flex-1 min-w-0">
                               <p className={cn(
@@ -159,8 +175,9 @@ export default function DayBookingsList({
                               )}>
                                 {isCurrentUser ? 'Tú' : userName}
                               </p>
-                              <p className="text-xs text-gray-500 mt-0.5">
-                                {booking.status === 'pending' ? 'Pendiente de confirmación' : 'Confirmada'}
+                              <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1.5">
+                                <CheckCircle className="w-3.5 h-3.5 text-green-600" strokeWidth={2.5} />
+                                <span>Confirmada</span>
                               </p>
                               {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
                                 <p className="text-xs text-orange-600 mt-1 flex items-center gap-1">
@@ -222,6 +239,9 @@ export default function DayBookingsList({
                     const userName = booking.user?.full_name || 
                                     booking.user?.email?.split('@')[0] || 
                                     'Usuario desconocido'
+                    const initials = getProfileInitials(booking.user)
+                    const queuePos = index + 1
+                    const color = getFaceHashColor(booking.user?.id || booking.user_id || booking.user?.email || initials)
                     
                     return (
                       <div
@@ -234,21 +254,33 @@ export default function DayBookingsList({
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3 flex-1 min-w-0">
-                            <div className={cn(
-                              "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0",
-                              isCurrentUser ? "bg-purple-500" : "bg-purple-400"
-                            )}>
-                              <UserPlus className="w-5 h-5 text-white" strokeWidth={2.5} />
+                            <div
+                              className={cn(
+                                "w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-semibold text-white shadow-sm ring-2 ring-offset-2 ring-offset-white",
+                                isCurrentUser ? "ring-purple-200" : "ring-purple-100"
+                              )}
+                              style={{
+                                background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
+                              }}
+                            >
+                              {initials}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className={cn(
-                                "font-semibold truncate",
-                                isCurrentUser ? "text-purple-900" : "text-gray-900"
-                              )}>
-                                {isCurrentUser ? 'Tú' : userName}
-                              </p>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <p
+                                  className={cn(
+                                    "font-semibold truncate",
+                                    isCurrentUser ? "text-purple-900" : "text-gray-900"
+                                  )}
+                                >
+                                  {isCurrentUser ? 'Tú' : userName}
+                                </p>
+                                <span className="flex-shrink-0 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-purple-600 text-white">
+                                  #{queuePos}
+                                </span>
+                              </div>
                               <p className="text-xs text-gray-500 mt-0.5">
-                                Posición {index + 1} en lista de espera
+                                Posición {queuePos} en lista de espera
                               </p>
                             </div>
                           </div>

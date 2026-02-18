@@ -32,7 +32,7 @@ export default function NotificationsPage() {
       }
 
       console.log('🔍 Loading notifications for user:', auth.user.id)
-      
+
       const { data, error: nError } = await supabase
         .from('notifications')
         .select('*')
@@ -44,11 +44,25 @@ export default function NotificationsPage() {
         console.error('❌ Error loading notifications:', nError)
         throw nError
       }
-      
+
       console.log('✅ Notifications loaded:', data?.length || 0, 'items')
       console.log('📋 Notifications data:', data)
-      
-      setItems((data || []) as AppNotification[])
+
+      // Deduplicar: si hay dos notificaciones del mismo tipo para el mismo booking
+      // creadas con menos de 60 segundos de diferencia, quedarse solo con la más reciente
+      const raw = (data || []) as AppNotification[]
+      const deduped: AppNotification[] = []
+      for (const n of raw) {
+        const bookingId = (n.data as any)?.bookingId
+        const isDuplicate = bookingId !== undefined && deduped.some(existing => {
+          const existingBookingId = (existing.data as any)?.bookingId
+          if (existing.type !== n.type || existingBookingId !== bookingId) return false
+          const diff = Math.abs(new Date(existing.created_at).getTime() - new Date(n.created_at).getTime())
+          return diff < 60_000 // 60 segundos
+        })
+        if (!isDuplicate) deduped.push(n)
+      }
+      setItems(deduped)
     } catch (e: any) {
       console.error('❌ Error in loadNotifications:', e)
       setError(e.message || 'Error cargando notificaciones')
@@ -241,14 +255,12 @@ export default function NotificationsPage() {
             <button
               onClick={handlePushToggle}
               disabled={pushStatus === 'enabling' || !isFirebaseConfigured}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                pushStatus === 'enabled' ? 'bg-orange-500' : 'bg-gray-300'
-              }`}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${pushStatus === 'enabled' ? 'bg-orange-500' : 'bg-gray-300'
+                }`}
             >
               <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  pushStatus === 'enabled' ? 'translate-x-6' : 'translate-x-1'
-                }`}
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${pushStatus === 'enabled' ? 'translate-x-6' : 'translate-x-1'
+                  }`}
               />
             </button>
             <span className="text-xs text-gray-500">
@@ -297,25 +309,25 @@ export default function NotificationsPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
+        <div className="space-y-3 lg:space-y-4">
           {items.map((n) => (
             <div
               key={n.id}
               className="relative rounded-[20px] p-4 border border-gray-200 bg-white"
             >
-          <button
-            onClick={() => {
-              // Navegar a admin para ciertos tipos especiales, tras marcar como leída
-              if (n.type === 'booking_requested' || n.type === 'user_registered') {
-                markAsRead(n)
-                navigate('/admin')
-              } else {
-                // Para otros tipos, solo marcar como leída
-                markAsRead(n)
-              }
-            }}
-            className="w-full text-left active:scale-[0.99] transition"
-          >
+              <button
+                onClick={() => {
+                  // Navegar a admin para ciertos tipos especiales, tras marcar como leída
+                  if (n.type === 'booking_requested' || n.type === 'user_registered' || n.type === 'booking_cancelled_by_user') {
+                    markAsRead(n)
+                    navigate('/admin')
+                  } else {
+                    // Para otros tipos, solo marcar como leída
+                    markAsRead(n)
+                  }
+                }}
+                className="w-full text-left active:scale-[0.99] transition"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <p className="text-gray-900 font-semibold flex items-center gap-1">
@@ -328,7 +340,21 @@ export default function NotificationsPage() {
                         <span className="flex-shrink-0">✅</span>
                       )}
                     </p>
-                    <p className="text-gray-600 text-sm mt-1">{n.body}</p>
+                    <div className="text-gray-600 text-sm mt-1">
+                      {n.body.split('\n').map((line, i) => {
+                        // Render **bold** segments within each line
+                        const parts = line.split(/(\*\*[^*]+\*\*)/g)
+                        return (
+                          <p key={i} className={i > 0 ? 'mt-1' : ''}>
+                            {parts.map((part, j) =>
+                              part.startsWith('**') && part.endsWith('**')
+                                ? <strong key={j}>{part.slice(2, -2)}</strong>
+                                : part
+                            )}
+                          </p>
+                        )
+                      })}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {!n.read_at && (

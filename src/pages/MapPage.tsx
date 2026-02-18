@@ -365,11 +365,27 @@ export default function MapPage() {
       } else {
         
         // Cargar perfiles de usuarios que tienen reservas (incluyendo carpooling múltiple)
-        if (bookingsData && bookingsData.length > 0) {
-          const userIds = [...new Set(bookingsData.map(b => b.user_id))]
+        const pendingIds = (bookingsData || []).filter((b: any) => b.status === 'pending').map((b: any) => b.id)
+        if (pendingIds.length > 0) {
+          console.warn('⚠️ Migrando reservas legacy pending → waitlist (MapPage):', pendingIds.length)
+          supabase
+            .from('bookings')
+            .update({ status: 'waitlist', spot_id: null })
+            .in('id', pendingIds)
+            .then(({ error }) => {
+              if (error) console.error('Error migrating pending → waitlist (MapPage):', error)
+            })
+        }
+
+        const normalizedBookingsData = (bookingsData || []).map((b: any) =>
+          b.status === 'pending' ? { ...b, status: 'waitlist', spot_id: null } : b
+        )
+
+        if (normalizedBookingsData && normalizedBookingsData.length > 0) {
+          const userIds = [...new Set(normalizedBookingsData.map((b: any) => b.user_id))]
 
           // Leer tabla de relaciones de carpooling múltiple
-          const bookingIds = bookingsData.map(b => b.id)
+          const bookingIds = normalizedBookingsData.map((b: any) => b.id)
           const { data: carpoolLinks, error: carpoolLinksError } = await supabase
             .from('booking_carpool_users')
             .select('*')
@@ -380,7 +396,7 @@ export default function MapPage() {
           }
 
           // IDs de compañeros de coche (legacy + nueva tabla)
-          const legacyCarpoolIds = bookingsData
+          const legacyCarpoolIds = normalizedBookingsData
             .map(b => b.carpool_with_user_id)
             .filter((id): id is string => id !== null)
           const linksUserIds = (carpoolLinks || []).map(link => link.user_id as string)
@@ -407,14 +423,14 @@ export default function MapPage() {
               console.warn('Ejecuta el script fix_profiles_rls_for_map.sql en Supabase para permitir que los usuarios vean los perfiles de otros.')
               console.warn('Este script recreará las políticas RLS correctamente para que todos los usuarios autenticados puedan ver los perfiles.')
             }
-            setBookingsWithUsers(bookingsData.map(b => ({ ...b, user: undefined })))
+            setBookingsWithUsers(normalizedBookingsData.map((b: any) => ({ ...b, user: undefined })))
           } else {
             console.log('Perfiles cargados:', profilesData?.length || 0, 'de', userIds.length, 'usuarios')
 
             const profilesMap = new Map<string, Profile>()
             profilesData?.forEach(p => profilesMap.set(p.id, p))
 
-            const bookingsWithUserInfo = bookingsData.map(booking => {
+            const bookingsWithUserInfo = normalizedBookingsData.map((booking: any) => {
               const userProfile = profilesMap.get(booking.user_id)
 
               // Construir lista de compañeros de coche
@@ -521,7 +537,22 @@ export default function MapPage() {
         console.error('Error cargando reservas del usuario:', bookingsError)
         setUserBookings([])
       } else {
-        setUserBookings(bookingsData || [])
+        const pendingIds = (bookingsData || []).filter((b: any) => b.status === 'pending').map((b: any) => b.id)
+        if (pendingIds.length > 0) {
+          console.warn('⚠️ Migrando reservas legacy pending → waitlist (MapPage userBookings):', pendingIds.length)
+          supabase
+            .from('bookings')
+            .update({ status: 'waitlist', spot_id: null })
+            .in('id', pendingIds)
+            .then(({ error }) => {
+              if (error) console.error('Error migrating pending → waitlist (MapPage userBookings):', error)
+            })
+        }
+
+        const normalized = (bookingsData || []).map((b: any) =>
+          b.status === 'pending' ? { ...b, status: 'waitlist', spot_id: null } : b
+        )
+        setUserBookings(normalized)
       }
     } catch (error) {
       console.error('Error loading user bookings:', error)
@@ -675,13 +706,41 @@ export default function MapPage() {
 
         if (notifyError) {
           console.error('❌ Error enviando notificaciones push:', notifyError)
-          // No lanzar error, solo loguear - el desbloqueo ya fue exitoso
+          console.error('Error details:', {
+            message: notifyError.message,
+            name: notifyError.name,
+            context: notifyError.context,
+          })
+          // Mostrar error al usuario pero no bloquear el desbloqueo
+          setError(`Semana desbloqueada, pero hubo un error al enviar notificaciones: ${notifyError.message}`)
         } else {
-          console.log('✅ Notificaciones push enviadas:', notifyData)
+          console.log('✅ Respuesta de función recibida:', notifyData)
+          if (notifyData) {
+            console.log('Resultados de notificaciones:', {
+              ok: notifyData.ok,
+              pushed: notifyData.pushed,
+              totalUsers: notifyData.totalUsers,
+              totalTokens: notifyData.totalTokens,
+              success: notifyData.success,
+              failure: notifyData.failure,
+              note: notifyData.note,
+            })
+            
+            if (notifyData.pushed === 0 && notifyData.note) {
+              console.warn('⚠️ Advertencia:', notifyData.note)
+            }
+          } else {
+            console.warn('⚠️ La función no devolvió datos')
+          }
         }
       } catch (notifyErr: any) {
         console.error('❌ Error invocando función de notificaciones:', notifyErr)
-        // No lanzar error, solo loguear - el desbloqueo ya fue exitoso
+        console.error('Exception details:', {
+          message: notifyErr.message,
+          stack: notifyErr.stack,
+        })
+        // Mostrar error al usuario pero no bloquear el desbloqueo
+        setError(`Semana desbloqueada, pero hubo un error al enviar notificaciones: ${notifyErr.message}`)
       }
     } catch (err: any) {
       console.error('Error unlocking week:', err)
@@ -919,7 +978,8 @@ export default function MapPage() {
           user_id: user.id,
           spot_id: selectedSpotId,
           date: selectedDate,
-          status: 'pending',
+          // 'pending' ya no se usa: si se reserva una plaza concreta es una confirmación directa
+          status: 'confirmed',
         })
         .select()
         .single()
@@ -1257,6 +1317,18 @@ export default function MapPage() {
     if (!user) return
 
     try {
+      // Obtener estado previo para saber si estaba confirmada
+      const { data: existing, error: fetchError } = await supabase
+        .from('bookings')
+        .select('id, status')
+        .eq('id', bookingId)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (fetchError) throw fetchError
+
+      const wasConfirmed = existing?.status === 'confirmed'
+
       const { error } = await supabase
         .from('bookings')
         .update({ status: 'cancelled' })
@@ -1265,8 +1337,23 @@ export default function MapPage() {
 
       if (error) throw error
 
-      // Después de cancelar, verificar si hay alguien en lista de espera para promover
-      await promoteFromWaitlist(bookingId)
+      // Notificar a admins solo si era una reserva confirmada
+      if (wasConfirmed) {
+        try {
+          console.log('📤 Notificando cancelación de reserva confirmada (MapPage) bookingId:', bookingId)
+          const { data: notifyData, error: notifyError } = await supabase.functions.invoke('notify-booking-cancelled', {
+            body: { bookingId },
+          })
+
+          if (notifyError) {
+            console.error('❌ Error enviando notificación de cancelación (MapPage):', notifyError)
+          } else {
+            console.log('✅ Notificación de cancelación enviada (MapPage):', notifyData)
+          }
+        } catch (notifyErr: any) {
+          console.error('❌ Error invocando notify-booking-cancelled (MapPage):', notifyErr)
+        }
+      }
 
       await loadWeekBookings()
       await loadUserBookings()
@@ -1274,117 +1361,6 @@ export default function MapPage() {
     } catch (err: any) {
       console.error('Error canceling booking:', err)
       setError(err.message || 'Error al cancelar la reserva')
-    }
-  }
-
-  // Función para promover el primero de la lista de espera cuando se cancela una reserva
-  const promoteFromWaitlist = async (cancelledBookingId: number) => {
-    try {
-      // Obtener la reserva cancelada para saber la fecha y el estado anterior
-      const { data: cancelledBooking } = await supabase
-        .from('bookings')
-        .select('date, status')
-        .eq('id', cancelledBookingId)
-        .single()
-
-      if (!cancelledBooking) return
-
-      // Solo promover si la reserva cancelada era una reserva activa (confirmed o pending)
-      // No promover si era waitlist (ya que no libera una plaza)
-      if (cancelledBooking.status === 'waitlist') {
-        return
-      }
-
-      // Contar plazas bloqueadas para este día (solo plazas normales, IDs 1-8)
-      const blockedSpotsForDate = spotBlocks.filter(
-        block => block.date === cancelledBooking.date && block.spot_id >= 1 && block.spot_id <= 8
-      )
-      const blockedSpotsCount = blockedSpotsForDate.length
-      const availableSpots = 8 - blockedSpotsCount
-
-      // Verificar que realmente haya espacio disponible (menos de 8 plazas ocupadas, excluyendo directivos y bloqueos)
-      const { data: activeBookings } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('date', cancelledBooking.date)
-        .neq('status', 'cancelled')
-        .eq('status', 'confirmed') // Solo contamos las confirmadas para determinar si hay espacio
-
-      if (activeBookings && activeBookings.length > 0) {
-        // Cargar perfiles para filtrar directivos
-        const userIds = [...new Set(activeBookings.map(b => b.user_id))]
-        const { data: profilesData } = await supabase
-          .from('profiles')
-          .select('id, role')
-          .in('id', userIds)
-
-        // Crear un mapa de roles
-        const roleMap = new Map<string, string>()
-        profilesData?.forEach(p => roleMap.set(p.id, p.role))
-
-        // Filtrar reservas de directivos del conteo
-        const normalBookingsCount = activeBookings.filter(b => {
-          const userRole = roleMap.get(b.user_id)
-          return userRole !== 'directivo'
-        }).length
-
-        // Si ya hay plazas ocupadas >= disponibles (considerando bloqueos), no promover
-        if (normalBookingsCount >= availableSpots) {
-          console.warn(`No se puede promover de waitlist: ya hay ${normalBookingsCount} plazas ocupadas de ${availableSpots} disponibles (excluyendo directivos y bloqueos)`)
-          return
-        }
-      } else {
-        // Si no hay reservas activas, verificar que no esté todo bloqueado
-        if (availableSpots <= 0) {
-          console.warn('No se puede promover de waitlist: todas las plazas están bloqueadas')
-          return
-        }
-      }
-
-      // Buscar el primero en la lista de espera para esa fecha (ordenado por created_at, excluyendo directivos)
-      const { data: waitlistEntries } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('date', cancelledBooking.date)
-        .eq('status', 'waitlist')
-        .order('created_at', { ascending: true })
-
-      if (waitlistEntries && waitlistEntries.length > 0) {
-        // Cargar perfiles para filtrar directivos
-        const waitlistUserIds = [...new Set(waitlistEntries.map(b => b.user_id))]
-        const { data: waitlistProfilesData } = await supabase
-          .from('profiles')
-          .select('id, role')
-          .in('id', waitlistUserIds)
-
-        // Crear un mapa de roles
-        const waitlistRoleMap = new Map<string, string>()
-        waitlistProfilesData?.forEach(p => waitlistRoleMap.set(p.id, p.role))
-
-        // Filtrar directivos y obtener el primero
-        const normalWaitlistEntries = waitlistEntries.filter(b => {
-          const userRole = waitlistRoleMap.get(b.user_id)
-          return userRole !== 'directivo'
-        })
-
-        if (normalWaitlistEntries.length > 0) {
-          const firstWaitlist = normalWaitlistEntries[0]
-          
-          // Promover a pending
-          const { error: promoteError } = await supabase
-            .from('bookings')
-            .update({ status: 'pending' })
-            .eq('id', firstWaitlist.id)
-
-          if (promoteError) {
-            console.error('Error promoting from waitlist:', promoteError)
-          } else {
-            console.log('Promovido de waitlist a pending:', firstWaitlist.id)
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Error in promoteFromWaitlist:', err)
     }
   }
 

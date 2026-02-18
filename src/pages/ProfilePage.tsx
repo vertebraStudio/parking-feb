@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { User, LogOut, Calendar, CheckCircle, Clock, TrendingUp, BarChart3, ArrowLeft, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
+import { LogOut, Calendar, CheckCircle, Clock, TrendingUp, BarChart3, ArrowLeft, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { Profile, Booking, ParkingSpot } from '../types'
 import ConfirmModal from '../components/ui/ConfirmModal'
@@ -9,6 +9,27 @@ import { es } from 'date-fns/locale'
 
 interface BookingWithSpot extends Booking {
   spot?: ParkingSpot
+}
+
+// Helpers para avatares (mismo estilo que AdminPage)
+function getFaceHashColor(key: string) {
+  const colors = ['#FF9500', '#34C759', '#0A84FF', '#AF52DE', '#FF2D55', '#FF9F0A', '#5AC8FA', '#FFCC00']
+  let hash = 0
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 31 + key.charCodeAt(i)) | 0
+  }
+  const index = Math.abs(hash) % colors.length
+  return colors[index]
+}
+
+function getProfileInitials(profile: Profile) {
+  const base = (profile.full_name && profile.full_name.trim()) || profile.email || ''
+  if (!base) return '?'
+  const parts = base.split(/\s+/).filter(Boolean)
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase()
+  }
+  return (parts[0][0] + parts[1][0]).toUpperCase()
 }
 
 export default function ProfilePage() {
@@ -124,7 +145,7 @@ export default function ProfilePage() {
         .from('bookings')
         .select('*')
         .eq('user_id', user.id)
-        .neq('status', 'cancelled')
+        // .neq('status', 'cancelled') // Permitir ver canceladas
         .order('date', { ascending: false })
 
       if (bookingsError) {
@@ -146,7 +167,27 @@ export default function ProfilePage() {
           ...booking,
           spot: spotsData?.find(spot => spot.id === booking.spot_id)
         }))
-        setBookings(bookingsWithSpots)
+
+        // Deduplicar: mantener solo el registro más reciente para cada fecha
+        // Deduplicar: mantener solo el registro más reciente para cada fecha
+        // Normalizar la fecha a YYYY-MM-DD para agrupar correctamente
+        const uniqueBookingsMap = new Map<string, BookingWithSpot>()
+        bookingsWithSpots.forEach(booking => {
+          // Asegurar que usamos solo la parte de la fecha (YYYY-MM-DD) como clave
+          const dateKey = typeof booking.date === 'string' ? booking.date.split('T')[0] : String(booking.date)
+
+          const existing = uniqueBookingsMap.get(dateKey)
+
+          // Si no existe, o si el actual es más reciente que el existente, guardarlo
+          if (!existing || new Date(booking.created_at) > new Date(existing.created_at)) {
+            uniqueBookingsMap.set(dateKey, booking)
+          }
+        })
+
+        const uniqueBookings = Array.from(uniqueBookingsMap.values())
+          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+
+        setBookings(uniqueBookings)
       } else {
         setBookings([])
       }
@@ -163,7 +204,7 @@ export default function ProfilePage() {
     const today = new Date()
     const tomorrow = new Date(today)
     tomorrow.setDate(tomorrow.getDate() + 1)
-    
+
     if (dateString === today.toISOString().split('T')[0]) {
       return 'Hoy'
     } else if (dateString === tomorrow.toISOString().split('T')[0]) {
@@ -178,19 +219,19 @@ export default function ProfilePage() {
     const now = new Date()
     const weekStart = startOfWeek(now, { locale: es })
     const weekEnd = endOfWeek(now, { locale: es })
-    
+
     const weekBookings = bookings.filter(b => {
       const bookingDate = new Date(b.date)
       return bookingDate >= weekStart && bookingDate <= weekEnd
     })
 
     const confirmed = weekBookings.filter(b => b.status === 'confirmed').length
-    const pending = weekBookings.filter(b => b.status === 'pending').length
+    const cancelled = weekBookings.filter(b => b.status === 'cancelled').length
 
     return {
-      total: weekBookings.length,
+      total: confirmed + cancelled,
       confirmed,
-      pending
+      cancelled
     }
   }
 
@@ -199,19 +240,19 @@ export default function ProfilePage() {
     const now = new Date()
     const monthStart = startOfMonth(now)
     const monthEnd = endOfMonth(now)
-    
+
     const monthBookings = bookings.filter(b => {
       const bookingDate = new Date(b.date)
       return bookingDate >= monthStart && bookingDate <= monthEnd
     })
 
     const confirmed = monthBookings.filter(b => b.status === 'confirmed').length
-    const pending = monthBookings.filter(b => b.status === 'pending').length
+    const cancelled = monthBookings.filter(b => b.status === 'cancelled').length
 
     return {
-      total: monthBookings.length,
+      total: confirmed + cancelled,
       confirmed,
-      pending
+      cancelled
     }
   }
 
@@ -371,10 +412,10 @@ export default function ProfilePage() {
         const today = new Date()
         const oneYearLater = new Date(today)
         oneYearLater.setFullYear(today.getFullYear() + 1)
-        
+
         const bookingsToCreate = []
         const currentDate = new Date(today)
-        
+
         while (currentDate <= oneYearLater) {
           // Solo crear reservas para días laborables (lunes a viernes)
           const dayOfWeek = currentDate.getDay()
@@ -407,7 +448,7 @@ export default function ProfilePage() {
           }
         }
       }
-      
+
       // Si se está quitando el rol de directivo
       if (user!.role === 'directivo' && newRole !== 'directivo') {
         // 1. Buscar la plaza asignada al usuario
@@ -499,8 +540,8 @@ export default function ProfilePage() {
       <div className="p-4 min-h-screen flex items-center justify-center bg-white">
         <div className="text-center py-8">
           <p className="text-gray-600 mb-4">
-            {isViewingOtherUser 
-              ? 'No se pudo cargar el perfil del usuario' 
+            {isViewingOtherUser
+              ? 'No se pudo cargar el perfil del usuario'
               : 'Debes iniciar sesión para ver tu perfil'}
           </p>
           {isViewingOtherUser && (
@@ -527,9 +568,9 @@ export default function ProfilePage() {
             <ArrowLeft className="w-5 h-5 text-gray-700" strokeWidth={2.5} />
           </button>
         )}
-        <h1 
+        <h1
           className="text-3xl lg:text-4xl font-semibold text-gray-900 tracking-tight flex-1"
-          style={{ 
+          style={{
             fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
             letterSpacing: '-0.5px'
           }}
@@ -539,22 +580,25 @@ export default function ProfilePage() {
       </div>
 
       {/* Información del usuario */}
-      <div 
+      <div
         className="mb-6 p-4 rounded-[20px] border border-gray-200 bg-gray-50"
       >
         <div className="flex items-center gap-4">
-          <div 
-            className="w-16 h-16 rounded-full flex items-center justify-center"
-            style={{ backgroundColor: '#FF9500' }}
+          <div
+            className="w-16 h-16 rounded-full flex items-center justify-center text-white text-xl font-bold shadow-sm"
+            style={{
+              backgroundColor: user ? getFaceHashColor(user.id) : '#ccc',
+              textShadow: '0 1px 2px rgba(0,0,0,0.1)'
+            }}
           >
-            <User className="w-8 h-8 text-white" strokeWidth={2.5} />
+            {user ? getProfileInitials(user) : '?'}
           </div>
           <div className="flex-1">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 
+                <h2
                   className="text-xl font-bold text-gray-900"
-                  style={{ 
+                  style={{
                     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
                   }}
                 >
@@ -563,7 +607,7 @@ export default function ProfilePage() {
                 <p className="text-sm text-gray-600">{user!.email}</p>
                 <div className="flex items-center gap-2 mt-2">
                   {user!.role === 'admin' && (
-                    <span 
+                    <span
                       className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
                       style={{ backgroundColor: '#FF9500' }}
                     >
@@ -571,7 +615,7 @@ export default function ProfilePage() {
                     </span>
                   )}
                   {user!.role === 'directivo' && (
-                    <span 
+                    <span
                       className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px]"
                       style={{ backgroundColor: '#111C4E' }}
                     >
@@ -579,7 +623,7 @@ export default function ProfilePage() {
                     </span>
                   )}
                   {user!.is_verified && user!.role === 'user' && (
-                    <span 
+                    <span
                       className="px-2 py-0.5 text-xs font-bold text-white rounded-[8px] flex items-center gap-1"
                       style={{ backgroundColor: '#34C759' }}
                     >
@@ -636,174 +680,196 @@ export default function ProfilePage() {
       </div>
 
       {/* Estadísticas semanales y mensuales */}
-      <div className="lg:grid lg:grid-cols-2 lg:gap-6 mb-6">
-      <div className="mb-6 lg:mb-0">
-        <div className="flex items-center gap-2 mb-3">
-          <Calendar className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
-          <h2 
-            className="text-lg font-bold text-gray-900"
-            style={{ 
-              fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-              letterSpacing: '-0.2px'
-            }}
-          >
-            Esta Semana
-          </h2>
+      <div className="space-y-6 mb-6">
+        <div className="mb-6 lg:mb-0">
+          <div className="flex items-center gap-2 mb-3">
+            <Calendar className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
+            <h2
+              className="text-lg font-bold text-gray-900"
+              style={{
+                fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
+                letterSpacing: '-0.2px'
+              }}
+            >
+              Esta Semana
+            </h2>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div
+              className="p-4 rounded-[20px] border border-gray-200 bg-white"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <BarChart3 className="w-4 h-4 text-gray-600" strokeWidth={2} />
+                <span className="text-xs font-medium text-gray-600">Total</span>
+              </div>
+              <p className="text-2xl font-bold text-gray-900">{weeklyStats.total}</p>
+            </div>
+            <div
+              className="p-4 rounded-[20px] border border-green-200 bg-green-50"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle className="w-4 h-4" style={{ color: '#34C759' }} strokeWidth={2} />
+                <span className="text-xs font-medium" style={{ color: '#34C759' }}>Confirmadas</span>
+              </div>
+              <p className="text-2xl font-bold" style={{ color: '#34C759' }}>{weeklyStats.confirmed}</p>
+            </div>
+            <div
+              className="p-4 rounded-[20px] border border-red-200 bg-red-50"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Trash2 className="w-4 h-4" style={{ color: '#FF3B30' }} strokeWidth={2} />
+                <span className="text-xs font-medium" style={{ color: '#FF3B30' }}>Canceladas</span>
+              </div>
+              <p className="text-2xl font-bold" style={{ color: '#FF3B30' }}>{(weeklyStats as any).cancelled}</p>
+            </div>
+          </div>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div 
-            className="p-4 rounded-[20px] border border-gray-200 bg-white"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <BarChart3 className="w-4 h-4 text-gray-600" strokeWidth={2} />
-              <span className="text-xs font-medium text-gray-600">Total</span>
-            </div>
-            <p className="text-2xl font-bold text-gray-900">{weeklyStats.total}</p>
-          </div>
-          <div 
-            className="p-4 rounded-[20px] border border-green-200 bg-green-50"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle className="w-4 h-4" style={{ color: '#34C759' }} strokeWidth={2} />
-              <span className="text-xs font-medium" style={{ color: '#34C759' }}>Confirmadas</span>
-            </div>
-            <p className="text-2xl font-bold" style={{ color: '#34C759' }}>{weeklyStats.confirmed}</p>
-          </div>
-          <div 
-            className="p-4 rounded-[20px] border border-orange-200 bg-orange-50"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <Clock className="w-4 h-4" style={{ color: '#FF9500' }} strokeWidth={2} />
-              <span className="text-xs font-medium" style={{ color: '#FF9500' }}>Pendientes</span>
-            </div>
-            <p className="text-2xl font-bold" style={{ color: '#FF9500' }}>{weeklyStats.pending}</p>
-          </div>
-        </div>
-      </div>
 
-      {/* Estadísticas mensuales */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <TrendingUp className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
-          <h2 
-            className="text-lg font-bold text-gray-900"
-            style={{ 
-              fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-              letterSpacing: '-0.2px'
-            }}
-          >
-            Este Mes ({format(new Date(), 'MMMM yyyy', { locale: es })})
-          </h2>
+        {/* Estadísticas mensuales */}
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingUp className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
+            <h2
+              className="text-lg font-bold text-gray-900"
+              style={{
+                fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
+                letterSpacing: '-0.2px'
+              }}
+            >
+              Este Mes ({format(new Date(), 'MMMM yyyy', { locale: es })})
+            </h2>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div
+              className="p-4 rounded-[20px] border border-gray-200 bg-white"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <BarChart3 className="w-4 h-4 text-gray-600" strokeWidth={2} />
+                <span className="text-xs font-medium text-gray-600">Total</span>
+              </div>
+              <p className="text-2xl font-bold text-gray-900">{monthlyStats.total}</p>
+            </div>
+            <div
+              className="p-4 rounded-[20px] border border-green-200 bg-green-50"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle className="w-4 h-4" style={{ color: '#34C759' }} strokeWidth={2} />
+                <span className="text-xs font-medium" style={{ color: '#34C759' }}>Confirmadas</span>
+              </div>
+              <p className="text-2xl font-bold" style={{ color: '#34C759' }}>{monthlyStats.confirmed}</p>
+            </div>
+            <div
+              className="p-4 rounded-[20px] border border-red-200 bg-red-50"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <Trash2 className="w-4 h-4" style={{ color: '#FF3B30' }} strokeWidth={2} />
+                <span className="text-xs font-medium" style={{ color: '#FF3B30' }}>Canceladas</span>
+              </div>
+              <p className="text-2xl font-bold" style={{ color: '#FF3B30' }}>{(monthlyStats as any).cancelled}</p>
+            </div>
+          </div>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div 
-            className="p-4 rounded-[20px] border border-gray-200 bg-white"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <BarChart3 className="w-4 h-4 text-gray-600" strokeWidth={2} />
-              <span className="text-xs font-medium text-gray-600">Total</span>
-            </div>
-            <p className="text-2xl font-bold text-gray-900">{monthlyStats.total}</p>
-          </div>
-          <div 
-            className="p-4 rounded-[20px] border border-green-200 bg-green-50"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <CheckCircle className="w-4 h-4" style={{ color: '#34C759' }} strokeWidth={2} />
-              <span className="text-xs font-medium" style={{ color: '#34C759' }}>Confirmadas</span>
-            </div>
-            <p className="text-2xl font-bold" style={{ color: '#34C759' }}>{monthlyStats.confirmed}</p>
-          </div>
-          <div 
-            className="p-4 rounded-[20px] border border-orange-200 bg-orange-50"
-          >
-            <div className="flex items-center gap-2 mb-2">
-              <Clock className="w-4 h-4" style={{ color: '#FF9500' }} strokeWidth={2} />
-              <span className="text-xs font-medium" style={{ color: '#FF9500' }}>Pendientes</span>
-            </div>
-            <p className="text-2xl font-bold" style={{ color: '#FF9500' }}>{monthlyStats.pending}</p>
-          </div>
-        </div>
-      </div>
       </div>
 
       {/* Historial de reservas - ocultable */}
-      {bookings.length > 0 && (
-        <div className="mb-6">
-          <button
-            onClick={() => setShowBookingHistory(!showBookingHistory)}
-            className="w-full flex items-center justify-between p-4 rounded-[20px] border border-gray-200 bg-white hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
-          >
-            <div className="flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
-              <h2 
-                className="text-lg font-bold text-gray-900"
-                style={{ 
-                  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
-                  letterSpacing: '-0.2px'
-                }}
-              >
-                Historial de Reservas
-              </h2>
-              <span className="text-sm text-gray-500">({bookings.length})</span>
-            </div>
-            {showBookingHistory ? (
-              <ChevronUp className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
-            ) : (
-              <ChevronDown className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
-            )}
-          </button>
-          {showBookingHistory && (
-            <div className="mt-3 space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
-            {bookings.map((booking) => (
-              <div
-                key={booking.id}
-                className="p-4 rounded-[20px] border bg-white transition-all duration-200"
-                style={{
-                  borderColor: booking.status === 'confirmed' ? '#34C759' : '#FF9500',
-                  backgroundColor: booking.status === 'confirmed' ? '#F0FDF4' : '#FFF7ED'
-                }}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Calendar className="w-5 h-5" style={{ color: booking.status === 'confirmed' ? '#34C759' : '#FF9500' }} strokeWidth={2.5} />
-                      <div>
-                        <p className="text-base font-bold text-gray-900 mb-0.5">
-                          {format(new Date(booking.created_at), 'EEEE, d \'de\' MMMM yyyy', { locale: es })}
-                        </p>
-                        <p className="text-xs font-medium text-gray-500">
-                          {format(new Date(booking.created_at), 'HH:mm', { locale: es })} • Para el día {formatDateDisplay(booking.date)}
-                        </p>
+      {(() => {
+        // Filtrar reservas para historial: 
+        // 1. Excluir pendientes/waitlist
+        // 2. Solo últimos 30 días
+        const historyBookings = bookings.filter(b => {
+          const isConfirmedOrCancelled = b.status === 'confirmed' || b.status === 'cancelled'
+          if (!isConfirmedOrCancelled) return false
+
+          // Calcular hace 30 días
+          const thirtyDaysAgo = new Date()
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+
+          const bookingDate = new Date(b.date)
+          return bookingDate >= thirtyDaysAgo
+        })
+
+        if (historyBookings.length === 0 && bookings.length > 0) return null // Si hay reservas pero ninguna cumple el filtro
+
+        return historyBookings.length > 0 ? (
+          <div className="mb-6">
+            <button
+              onClick={() => setShowBookingHistory(!showBookingHistory)}
+              className="w-full flex items-center justify-between p-4 rounded-[20px] border border-gray-200 bg-white hover:bg-gray-50 transition-all duration-200 active:scale-[0.98]"
+            >
+              <div className="flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
+                <h2
+                  className="text-lg font-bold text-gray-900"
+                  style={{
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
+                    letterSpacing: '-0.2px'
+                  }}
+                >
+                  Historial de Reservas
+                </h2>
+                <span className="text-sm text-gray-500">({historyBookings.length})</span>
+              </div>
+              {showBookingHistory ? (
+                <ChevronUp className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-gray-600" strokeWidth={2.5} />
+              )}
+            </button>
+            {showBookingHistory && (
+              <div className="mt-3 space-y-2 lg:grid lg:grid-cols-2 lg:gap-3 lg:space-y-0">
+                {historyBookings.map((booking) => (
+                  <div
+                    key={booking.id}
+                    className="p-4 rounded-[20px] border bg-white transition-all duration-200"
+                    style={{
+                      borderColor: booking.status === 'confirmed' ? '#34C759' : booking.status === 'cancelled' ? '#FF3B30' : '#AF52DE',
+                      backgroundColor: booking.status === 'confirmed' ? '#F0FDF4' : booking.status === 'cancelled' ? '#FFF5F5' : '#FAF5FF',
+                      opacity: booking.status === 'cancelled' ? 0.8 : 1
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="mb-1">
+                          <p className="text-base font-bold text-gray-900 mb-0.5">
+                            {formatDateDisplay(booking.date)}
+                          </p>
+                          <p className="text-xs font-medium text-gray-500">
+                            Solicitado el {format(new Date(booking.created_at), "d 'de' MMM 'a las' HH:mm", { locale: es })}
+                          </p>
+                        </div>
                       </div>
+                      <span
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-[10px] flex-shrink-0 ${booking.status === 'confirmed'
+                          ? 'bg-green-50 text-green-700 border border-green-200'
+                          : booking.status === 'cancelled'
+                            ? 'bg-red-50 text-red-700 border border-red-200'
+                            : 'bg-orange-50 text-orange-700 border border-orange-200'
+                          }`}
+                      >
+                        {booking.status === 'confirmed' ? (
+                          <span>
+                            Confirmada
+                          </span>
+                        ) : booking.status === 'cancelled' ? (
+                          <span>
+                            Cancelada
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3 h-3" strokeWidth={2.5} />
+                            Pendiente
+                          </span>
+                        )}
+                      </span>
+
                     </div>
                   </div>
-                  <span
-                    className={`px-3 py-1.5 text-xs font-semibold rounded-[10px] flex-shrink-0 ${
-                      booking.status === 'confirmed'
-                        ? 'bg-green-50 text-green-700 border border-green-200'
-                        : 'bg-orange-50 text-orange-700 border border-orange-200'
-                    }`}
-                  >
-                    {booking.status === 'confirmed' ? (
-                      <span className="flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3" strokeWidth={2.5} />
-                        Confirmada
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3" strokeWidth={2.5} />
-                        Pendiente
-                      </span>
-                    )}
-                  </span>
-                </div>
+                ))}
               </div>
-            ))}
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        ) : null
+      })()}
 
       {bookings.length === 0 && !loading && (
         <div className="mb-6 p-4 rounded-[20px] border border-gray-200 bg-gray-50 text-center">
@@ -819,7 +885,7 @@ export default function ProfilePage() {
           className="w-full p-4 rounded-[20px] border border-red-200 bg-red-50 flex items-center justify-center gap-3 transition-all duration-200 active:scale-95"
         >
           <LogOut className="w-5 h-5" style={{ color: '#FF3B30' }} strokeWidth={2.5} />
-          <span 
+          <span
             className="font-semibold"
             style={{ color: '#FF3B30' }}
           >

@@ -24,3 +24,7 @@ verify_jwt = false
 [functions.notify-week-unlocked]
 # Permitir llamadas desde el frontend sin JWT (usa SERVICE_ROLE_KEY internamente)
 verify_jwt = false
+
+[functions.notify-booking-cancelled]
+# Notificar a admins cuando un usuario cancela una reserva confirmada
+verify_jwt = false

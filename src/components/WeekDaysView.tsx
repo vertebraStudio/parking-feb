@@ -80,15 +80,16 @@ export default function WeekDaysView({
   }
 
   // Obtener el estado de la reserva del usuario
-  const getUserBookingStatus = (date: string): 'confirmed' | 'pending' | 'waitlist' | null => {
+  const getUserBookingStatus = (date: string): 'confirmed' | 'waitlist' | null => {
     if (!userId) return null
     const dateString = format(new Date(date), 'yyyy-MM-dd')
     const booking = userBookings.find(
       b => b.date === dateString && b.status !== 'cancelled'
     )
-    return booking?.status === 'confirmed' ? 'confirmed' : 
-           booking?.status === 'pending' ? 'pending' :
-           booking?.status === 'waitlist' ? 'waitlist' : null
+    // 'pending' ya no se usa; si existe por datos legacy lo tratamos como 'waitlist'
+    if (booking?.status === 'confirmed') return 'confirmed'
+    if ((booking as any)?.status === 'pending') return 'waitlist'
+    return booking?.status === 'waitlist' ? 'waitlist' : null
   }
 
   // Contar cuántos están en lista de espera para un día (excluyendo directivos)
@@ -139,7 +140,6 @@ export default function WeekDaysView({
               "bg-white rounded-[20px] border p-4 transition-all duration-200",
               isDisabled && "opacity-60 grayscale",
               hasBooking && bookingStatus === 'confirmed' && "border-orange-500 bg-orange-50",
-              hasBooking && bookingStatus === 'pending' && "border-amber-400 bg-amber-50",
               hasBooking && bookingStatus === 'waitlist' && "border-purple-400 bg-purple-50",
               !hasBooking && !isDisabled && "border-gray-200 hover:border-gray-300 cursor-pointer",
               full && !hasBooking && "border-red-200 bg-red-50"
@@ -164,7 +164,6 @@ export default function WeekDaysView({
                         "w-6 h-6",
                         isDisabled ? "text-gray-400" :
                         hasBooking && bookingStatus === 'confirmed' ? "text-orange-600" :
-                        hasBooking && bookingStatus === 'pending' ? "text-amber-600" :
                         full ? "text-red-500" :
                         "text-gray-600"
                       )} 
@@ -234,21 +233,17 @@ export default function WeekDaysView({
                   </div>
                   {hasBooking && (
                     <div className="flex items-center gap-1">
-                      {bookingStatus === 'pending' ? (
-                        <Clock className="w-3 h-3 text-amber-600" strokeWidth={2.5} />
-                      ) : bookingStatus === 'waitlist' ? (
+                      {bookingStatus === 'waitlist' ? (
                         <UserPlus className="w-3 h-3 text-purple-600" strokeWidth={2.5} />
                       ) : null}
                       <span 
                         className={cn(
                           "text-xs font-medium",
-                          bookingStatus === 'pending' ? "text-amber-600" :
                           bookingStatus === 'waitlist' ? "text-purple-600" :
                           "text-orange-600"
                         )}
                       >
-                        {bookingStatus === 'pending' ? 'Pendiente' :
-                         bookingStatus === 'waitlist' ? 'En lista de espera' :
+                        {bookingStatus === 'waitlist' ? 'En lista de espera' :
                          'Tienes plaza'}
                       </span>
                     </div>

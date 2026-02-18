@@ -1,4 +1,4 @@
-import { Car, Lock, Clock } from 'lucide-react'
+import { Car, Lock } from 'lucide-react'
 import { ParkingSpot, Booking, SpotBlock, Profile } from '../types'
 import { cn } from '../lib/utils'
 
@@ -21,13 +21,13 @@ interface ParkingMapProps {
   occupyingSpot?: number | null
 }
 
-type SpotStatus = 'free' | 'occupied' | 'reserved_by_me' | 'reserved_by_me_pending' | 'blocked' | 'executive_assigned' | 'executive_released'
+type SpotStatus = 'free' | 'occupied' | 'reserved_by_me' | 'blocked' | 'executive_assigned' | 'executive_released'
 
 interface SpotWithStatus extends ParkingSpot {
   status: SpotStatus
   occupiedBy?: string // Nombre del usuario
   occupiedByName?: string // Nombre completo del usuario
-  bookingStatus?: 'confirmed' | 'pending' // Estado de la reserva del usuario
+  bookingStatus?: 'confirmed' // Estado de la reserva del usuario
 }
 
 export default function ParkingMap({
@@ -45,7 +45,7 @@ export default function ParkingMap({
   occupyingSpot,
 }: ParkingMapProps) {
   // Determinar el estado de cada plaza
-  const getSpotStatus = (spot: ParkingSpot): { status: SpotStatus; bookingStatus?: 'confirmed' | 'pending' } => {
+  const getSpotStatus = (spot: ParkingSpot): { status: SpotStatus; bookingStatus?: 'confirmed' } => {
     const date = selectedDate || new Date().toISOString().split('T')[0]
     
     // Verificar si está bloqueada permanentemente o por fecha
@@ -66,9 +66,6 @@ export default function ParkingMap({
         if (anyBooking) {
           // Si hay una reserva, mostrar como ocupada
           if (userId && anyBooking.user_id === userId) {
-            if (anyBooking.status === 'pending') {
-              return { status: 'reserved_by_me_pending', bookingStatus: 'pending' }
-            }
             return { status: 'reserved_by_me', bookingStatus: 'confirmed' }
           }
           return { status: 'occupied' }
@@ -89,9 +86,6 @@ export default function ParkingMap({
       if (executiveBooking) {
         // Si es el usuario actual y es el directivo, mostrar como reservada por él
         if (userId && executiveBooking.user_id === userId) {
-          if (executiveBooking.status === 'pending') {
-            return { status: 'reserved_by_me_pending', bookingStatus: 'pending' }
-          }
           return { status: 'reserved_by_me', bookingStatus: 'confirmed' }
         }
         // Si es otro usuario viendo, mostrar como ocupada por el directivo
@@ -111,9 +105,6 @@ export default function ParkingMap({
         if (otherUserBooking) {
           // Si hay una reserva de otro usuario, mostrar como ocupada
           if (userId && otherUserBooking.user_id === userId) {
-            if (otherUserBooking.status === 'pending') {
-              return { status: 'reserved_by_me_pending', bookingStatus: 'pending' }
-            }
             return { status: 'reserved_by_me', bookingStatus: 'confirmed' }
           }
           return { status: 'occupied' }
@@ -134,9 +125,6 @@ export default function ParkingMap({
       if (otherUserBooking) {
         // Si hay una reserva de otro usuario, mostrar como ocupada
         if (userId && otherUserBooking.user_id === userId) {
-          if (otherUserBooking.status === 'pending') {
-            return { status: 'reserved_by_me_pending', bookingStatus: 'pending' }
-          }
           return { status: 'reserved_by_me', bookingStatus: 'confirmed' }
         }
         return { status: 'occupied' }
@@ -153,10 +141,6 @@ export default function ParkingMap({
     if (activeBooking) {
       // Si la reserva es del usuario actual, mostrar como "reservada por mí"
       if (userId && activeBooking.user_id === userId) {
-        // Distinguir entre confirmada y pendiente
-        if (activeBooking.status === 'pending') {
-          return { status: 'reserved_by_me_pending', bookingStatus: 'pending' }
-        }
         return { status: 'reserved_by_me', bookingStatus: 'confirmed' }
       }
       return { status: 'occupied' }
@@ -257,7 +241,7 @@ export default function ParkingMap({
     if (isPastDate) return
     
     // No permitir clic en plazas bloqueadas, ocupadas por otros, o ya reservadas por el usuario
-    if (status === 'blocked' || status === 'occupied' || status === 'reserved_by_me' || status === 'reserved_by_me_pending' || status === 'executive_assigned') return
+    if (status === 'blocked' || status === 'occupied' || status === 'reserved_by_me' || status === 'executive_assigned') return
     
     // Permitir clic en plazas libres o plazas de directivo liberadas
     if (status === 'free') {
@@ -292,7 +276,6 @@ export default function ParkingMap({
           const isFree = spot.status === 'free'
           const isOccupied = spot.status === 'occupied'
           const isReservedByMe = spot.status === 'reserved_by_me'
-          const isReservedByMePending = spot.status === 'reserved_by_me_pending'
           const isBlocked = spot.status === 'blocked'
           const isExecutiveAssigned = spot.status === 'executive_assigned'
 
@@ -300,7 +283,7 @@ export default function ParkingMap({
             <button
               key={spot.id}
               onClick={() => handleSpotClick(spot.id, spot.status)}
-              disabled={isBlocked || isOccupied || isReservedByMe || isReservedByMePending || isPastDate || isExecutiveAssigned}
+              disabled={isBlocked || isOccupied || isReservedByMe || isPastDate || isExecutiveAssigned}
               className={cn(
                 'relative transition-all duration-300',
                 !isPastDate && 'active:scale-[0.97]',
@@ -311,7 +294,7 @@ export default function ParkingMap({
                 'rounded-[20px]', // Squircle style
                 'p-4',
                 // Glow effect para reserva propia (solo si no es fecha pasada)
-                (isReservedByMe || isReservedByMePending) && !isPastDate && 'shadow-[0_0_20px_rgba(255,149,0,0.4)]',
+                isReservedByMe && !isPastDate && 'shadow-[0_0_20px_rgba(255,149,0,0.4)]',
                 // Escala de grises para fechas pasadas
                 isPastDate && 'grayscale'
               )}
@@ -330,10 +313,6 @@ export default function ParkingMap({
                 ...(!isPastDate && isReservedByMe && {
                   borderColor: '#FF9500',
                   backgroundColor: '#FF9500',
-                }),
-                ...(!isPastDate && isReservedByMePending && {
-                  borderColor: '#FFB800',
-                  backgroundColor: '#FFB800',
                 }),
                 ...(!isPastDate && isOccupied && {
                   borderColor: '#FF3B30',
@@ -355,7 +334,7 @@ export default function ParkingMap({
               <div className={cn(
                 "absolute top-2.5 left-2.5 text-[10px] font-semibold tracking-wider",
                 isPastDate ? "text-gray-500" : 
-                (isReservedByMe || isReservedByMePending || isExecutiveAssigned) ? "text-white" : 
+                (isReservedByMe || isExecutiveAssigned) ? "text-white" : 
                 isOccupied ? "text-[#FF3B30]" : 
                 isBlocked ? "text-gray-400" : 
                 "text-gray-600"
@@ -390,12 +369,6 @@ export default function ParkingMap({
                       </p>
                     )}
                   </div>
-                ) : isReservedByMePending ? (
-                  <Clock 
-                    className="w-11 h-11" 
-                    style={{ color: isPastDate ? '#9CA3AF' : '#FFFFFF' }} 
-                    strokeWidth={2.5} 
-                  />
                 ) : isReservedByMe ? (
                   <Car 
                     className="w-11 h-11" 
@@ -412,15 +385,13 @@ export default function ParkingMap({
               </div>
 
               {/* Indicador de estado reservado por mí - glow sutil */}
-              {(isReservedByMe || isReservedByMePending) && (
+              {isReservedByMe && (
                 <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2">
                   <div 
                     className="w-2 h-2 rounded-full"
                     style={{ 
-                      backgroundColor: isReservedByMePending ? '#FFB800' : '#FF9500',
-                      boxShadow: isReservedByMePending 
-                        ? '0 0 8px rgba(255, 184, 0, 0.8)' 
-                        : '0 0 8px rgba(255, 149, 0, 0.8)'
+                      backgroundColor: '#FF9500',
+                      boxShadow: '0 0 8px rgba(255, 149, 0, 0.8)'
                     }}
                   ></div>
                 </div>

@@ -1,13 +1,12 @@
-// Supabase Edge Function: notify-week-unlocked
-// Envía notificaciones push a todos los usuarios cuando se desbloquea una semana
+// Supabase Edge Function: notify-booking-cancelled
+// Notifica a los administradores (in-app + push) cuando un usuario cancela
+// una reserva confirmada.
 //
 // Required secrets:
 // - SUPABASE_URL
 // - SUPABASE_SERVICE_ROLE_KEY
-// - FIREBASE_SERVICE_ACCOUNT_JSON (JSON completo del service account de Firebase)
-// - FIREBASE_PROJECT_ID (opcional, se puede extraer del JSON)
-//
-// Request body: { weekMonday: string } (formato YYYY-MM-DD)
+// - FIREBASE_SERVICE_ACCOUNT_JSON
+// - FIREBASE_PROJECT_ID (opcional)
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { create, getNumericDate } from 'https://deno.land/x/djwt@v3.0.2/mod.ts'
@@ -109,10 +108,10 @@ async function sendFCMV1Notification(
           body,
           icon: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
           badge: 'https://vertebrastudio.github.io/parking-feb/pwa-192x192.png',
-          tag: `week-unlocked-${data.weekMonday}`, // Tag único para evitar duplicados
+          tag: `booking-cancelled-${data.bookingId}`,
         },
         fcm_options: {
-          link: 'https://vertebrastudio.github.io/parking-feb/',
+          link: 'https://vertebrastudio.github.io/parking-feb/admin',
         },
       },
       android: {
@@ -161,7 +160,7 @@ async function sendFCMV1Notification(
 
 Deno.serve(async (req) => {
   try {
-    console.log('🚀 ===== Edge Function notify-week-unlocked STARTED =====')
+    console.log('🚀 ===== Edge Function notify-booking-cancelled STARTED =====')
     console.log('Request method:', req.method)
     console.log('Request URL:', req.url)
 
@@ -186,7 +185,7 @@ Deno.serve(async (req) => {
       return jsonResponse(500, { error: 'Missing Supabase env vars' })
     }
 
-    let payload: { weekMonday?: string } = {}
+    let payload: { bookingId?: number } = {}
     try {
       payload = (await req.json()) as any
       console.log('📦 Parsed payload:', payload)
@@ -195,111 +194,100 @@ Deno.serve(async (req) => {
       return jsonResponse(400, { error: 'Invalid JSON body' })
     }
 
-    const weekMonday = payload.weekMonday
-    if (!weekMonday || typeof weekMonday !== 'string') {
-      console.error('❌ Invalid weekMonday:', weekMonday)
-      return jsonResponse(400, { error: 'weekMonday is required (format: YYYY-MM-DD)' })
+    const bookingId = payload.bookingId
+    console.log('🔍 Looking for bookingId:', bookingId, 'Type:', typeof bookingId)
+    if (!bookingId || typeof bookingId !== 'number') {
+      console.error('❌ Invalid bookingId:', bookingId)
+      return jsonResponse(400, { error: 'bookingId is required' })
     }
 
     const serviceClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     console.log('✅ Supabase client created')
 
-    // Obtener todos los usuarios verificados (excluyendo directivos)
-    const { data: users, error: usersErr } = await serviceClient
+    // Obtener la reserva (ya cancelada) para saber usuario y fecha
+    const { data: booking, error: bookingErr } = await serviceClient
+      .from('bookings')
+      .select('id, user_id, date, status')
+      .eq('id', bookingId)
+      .single()
+
+    console.log('📋 Booking query result:', { booking, error: bookingErr })
+
+    if (bookingErr || !booking) {
+      console.error('❌ Booking not found or error:', bookingErr)
+      return jsonResponse(404, { error: 'Booking not found' })
+    }
+
+    // Aunque desde el frontend solo llamaremos para confirmadas,
+    // aquí no forzamos status por si ya se ha actualizado a 'cancelled'.
+
+    // Obtener perfil del usuario que cancela
+    const { data: userProfile, error: userErr } = await serviceClient
+      .from('profiles')
+      .select('id, email, full_name')
+      .eq('id', booking.user_id)
+      .single()
+
+    if (userErr) {
+      console.error('❌ Error fetching user profile:', userErr)
+    }
+
+    const displayName =
+      userProfile?.full_name ||
+      userProfile?.email ||
+      'Usuario'
+
+    // Obtener todos los administradores
+    const { data: admins, error: adminsErr } = await serviceClient
       .from('profiles')
       .select('id, email, full_name, role')
-      .eq('is_verified', true) // Solo usuarios verificados
-      .neq('role', 'directivo') // Excluir directivos
+      .in('role', ['admin'])
 
-    if (usersErr) {
-      console.error('❌ Error fetching users:', usersErr)
-      return jsonResponse(500, { error: 'Failed to fetch users' })
+    if (adminsErr) {
+      console.error('❌ Error fetching admins:', adminsErr)
+      return jsonResponse(500, { error: 'Failed to fetch admins' })
     }
 
-    if (!users || users.length === 0) {
-      console.log('⚠️ No users found')
-      return jsonResponse(200, { ok: true, pushed: 0, totalUsers: 0, note: 'No users found' })
+    if (!admins || admins.length === 0) {
+      console.log('⚠️ No admins found, skipping admin notifications')
+      return jsonResponse(200, { ok: true, pushed: 0, totalAdmins: 0 })
     }
 
-    console.log(`📋 Found ${users.length} users to notify`)
+    const title = 'Reserva cancelada por usuario ❌'
+    const body = `${displayName} ha cancelado su reserva para el día ${booking.date}.`
 
-    // Formatear fecha para el mensaje
-    // Asegurar que la fecha se parsea correctamente (YYYY-MM-DD)
-    const [year, month, day] = weekMonday.split('-').map(Number)
-    const weekDate = new Date(year, month - 1, day) // month es 0-indexed en JS
-    
-    // Verificar que la fecha es válida
-    if (isNaN(weekDate.getTime())) {
-      console.error('❌ Invalid date format:', weekMonday)
-      return jsonResponse(400, { error: 'Invalid date format. Expected YYYY-MM-DD' })
-    }
-    
-    const weekDateFormatted = weekDate.toLocaleDateString('es-ES', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    })
-
-    const title = '📅 Semana disponible'
-    const body = `Ya puedes solicitar reservas para la semana del ${weekDateFormatted}`
-
-    // 1) Insertar notificaciones in-app para todos los usuarios
-    const notificationsPayload = users.map((user: any) => ({
-      user_id: user.id,
-      type: 'week_unlocked',
+    // 1) Insertar notificaciones in-app para cada admin
+    const notificationsPayload = admins.map((admin: any) => ({
+      user_id: admin.id,
+      type: 'booking_cancelled_by_user',
       title,
       body,
       data: {
-        weekMonday,
-        type: 'week_unlocked',
+        bookingId: booking.id,
+        date: booking.date,
+        user_id: booking.user_id,
+        user_name: displayName,
       },
     }))
 
-    console.log('📝 Inserting in-app notifications, count:', notificationsPayload.length)
-    if (notificationsPayload.length > 0) {
-      console.log('Sample notification payload:', JSON.stringify(notificationsPayload[0], null, 2))
-    }
+    console.log('📝 Inserting admin notifications (cancelled), count:', notificationsPayload.length)
 
-    const { data: insertedNotifications, error: notifErr } = await serviceClient
+    const { error: notifErr } = await serviceClient
       .from('notifications')
       .insert(notificationsPayload)
-      .select('id')
 
     if (notifErr) {
-      console.error('❌ Failed to insert notifications:', notifErr)
-      console.error('Error details:', {
-        message: notifErr.message,
-        code: notifErr.code,
-        details: notifErr.details,
-        hint: notifErr.hint,
-      })
+      console.error('❌ Failed to insert admin notifications (cancelled):', notifErr)
       // Continuar igualmente, que al menos pueda intentar push
-      // Pero devolver información sobre el error
-      return jsonResponse(500, {
-        error: 'Failed to insert in-app notifications',
-        details: notifErr.message,
-        ok: false,
-        pushed: 0,
-        totalUsers: users.length,
-      })
     } else {
-      console.log('✅ In-app notifications inserted successfully')
-      console.log('Inserted count:', insertedNotifications?.length || 0)
-      if (insertedNotifications && insertedNotifications.length !== notificationsPayload.length) {
-        console.warn(`⚠️ Warning: Expected ${notificationsPayload.length} notifications, but only ${insertedNotifications.length} were inserted`)
-      }
+      console.log('✅ Admin notifications (cancelled) inserted successfully')
     }
 
-    // 2) Push via FCM V1 para todos los usuarios (si hay service account)
+    // 2) Push via FCM V1 para todos los admins (si hay service account)
     console.log('🔑 Checking FIREBASE_SERVICE_ACCOUNT_JSON:', FIREBASE_SERVICE_ACCOUNT_JSON ? 'SET' : 'NOT SET')
     if (!FIREBASE_SERVICE_ACCOUNT_JSON) {
       console.log('⚠️ FIREBASE_SERVICE_ACCOUNT_JSON not set, skipping push notifications')
-      return jsonResponse(200, {
-        ok: true,
-        pushed: 0,
-        totalUsers: users.length,
-        note: 'FIREBASE_SERVICE_ACCOUNT_JSON not set',
-      })
+      return jsonResponse(200, { ok: true, pushed: 0, totalAdmins: admins.length, note: 'FIREBASE_SERVICE_ACCOUNT_JSON not set' })
     }
 
     let serviceAccount: any
@@ -313,86 +301,71 @@ Deno.serve(async (req) => {
       return jsonResponse(500, { error: 'Invalid FIREBASE_SERVICE_ACCOUNT_JSON format' })
     }
 
-    // Obtener todos los tokens de push de los usuarios
-    const userIds = users.map((u: any) => u.id)
+    // Obtener todos los tokens de push de los admins
+    const adminIds = admins.map((a: any) => a.id)
 
     const { data: tokens, error: tokensErr } = await serviceClient
       .from('push_tokens')
       .select('user_id, token, platform, created_at')
-      .in('user_id', userIds)
+      .in('user_id', adminIds)
 
-    console.log('Tokens found for users:', {
-      userCount: users.length,
+    console.log('Tokens found for admins (cancelled):', {
+      adminCount: admins.length,
       tokenCount: tokens?.length || 0,
+      tokensSummary: tokens?.map((t: any) => ({ user_id: t.user_id, platform: t.platform, created_at: t.created_at })),
       error: tokensErr,
     })
 
     if (tokensErr) {
-      console.error('Error fetching tokens:', tokensErr)
-      return jsonResponse(200, {
-        ok: true,
-        pushed: 0,
-        note: 'Error fetching tokens',
-        error: tokensErr.message,
-      })
+      console.error('Error fetching admin tokens (cancelled):', tokensErr)
+      return jsonResponse(200, { ok: true, pushed: 0, note: 'Error fetching admin tokens', error: tokensErr.message })
     }
 
     const tokenList = (tokens || []).map((t: any) => t.token).filter(Boolean)
     if (tokenList.length === 0) {
-      console.log('No tokens found')
-      return jsonResponse(200, {
-        ok: true,
-        pushed: 0,
-        totalUsers: users.length,
-        note: 'No tokens found',
-      })
+      console.log('No admin tokens found (cancelled)')
+      return jsonResponse(200, { ok: true, pushed: 0, totalAdmins: admins.length, note: 'No admin tokens found' })
     }
 
-    console.log('🔐 Getting OAuth2 access token...')
+    console.log('🔐 Getting OAuth2 access token for admin push (cancelled)...')
     let accessToken: string
     try {
       accessToken = await getAccessToken(serviceAccount)
-      console.log('✅ Access token obtained')
+      console.log('✅ Access token obtained for admin push (cancelled)')
     } catch (err: any) {
-      console.error('❌ Error getting access token:', err)
-      return jsonResponse(500, {
-        error: 'Failed to get OAuth2 access token',
-        details: err.message,
-      })
+      console.error('❌ Error getting access token for admin push (cancelled):', err)
+      return jsonResponse(500, { error: 'Failed to get OAuth2 access token', details: err.message })
     }
 
-    console.log('📤 Sending FCM v1 notifications to', tokenList.length, 'token(s)')
+    console.log('📤 Sending FCM v1 notifications to admin tokens (cancelled):', tokenList.length)
 
     const dataPayload = {
-      weekMonday,
-      type: 'week_unlocked',
+      bookingId: String(booking.id),
+      date: String(booking.date),
+      type: 'booking_cancelled_by_user',
       title,
       body,
-      url: 'https://vertebrastudio.github.io/parking-feb/',
+      url: 'https://vertebrastudio.github.io/parking-feb/admin',
     }
 
-    // Enviar a cada token
     const results = await Promise.allSettled(
-      tokenList.map((token) =>
-        sendFCMV1Notification(accessToken, projectId, token, title, body, dataPayload)
-      ),
+      tokenList.map((token) => sendFCMV1Notification(accessToken, projectId, token, title, body, dataPayload)),
     )
 
     const successCount = results.filter((r) => r.status === 'fulfilled' && r.value.ok).length
     const failureCount = results.length - successCount
 
-    console.log('📊 FCM v1 Results:', {
+    console.log('📊 FCM v1 Results (admins cancelled):', {
       total: results.length,
       success: successCount,
       failure: failureCount,
     })
 
-    // Log errores individuales
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
-        console.error(`Token ${index} error:`, result.reason)
+        console.error(`Admin token ${index} error:`, result.reason)
       } else if (!result.value.ok) {
-        console.error(`Token ${index} failed:`, result.value.data)
+        console.error(`Admin token ${index} failed:`, result.value.data)
       }
     })
 
@@ -400,22 +373,22 @@ Deno.serve(async (req) => {
       ok: true,
       pushed: successCount,
       totalTokens: results.length,
-      totalUsers: users.length,
+      totalAdmins: admins.length,
       success: successCount,
       failure: failureCount,
     })
 
-    console.log('✅ ===== Edge Function notify-week-unlocked COMPLETED =====')
+    console.log('✅ ===== Edge Function notify-booking-cancelled COMPLETED =====')
     console.log('Response:', {
       ok: true,
       pushed: successCount,
       totalTokens: results.length,
-      totalUsers: users.length,
+      totalAdmins: admins.length,
     })
 
     return response
   } catch (error: any) {
-    console.error('❌ ===== Edge Function notify-week-unlocked ERROR =====')
+    console.error('❌ ===== Edge Function notify-booking-cancelled ERROR =====')
     console.error('Error type:', error?.constructor?.name)
     console.error('Error message:', error?.message)
     console.error('Error stack:', error?.stack)
@@ -427,3 +400,4 @@ Deno.serve(async (req) => {
     })
   }
 })
+

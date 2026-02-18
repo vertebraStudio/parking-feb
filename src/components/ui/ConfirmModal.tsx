@@ -1,3 +1,4 @@
+import { ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
@@ -11,6 +12,7 @@ interface ConfirmModalProps {
   cancelText?: string
   loading?: boolean
   confirmButtonClass?: string
+  children?: ReactNode
 }
 
 export default function ConfirmModal({
@@ -23,6 +25,7 @@ export default function ConfirmModal({
   cancelText = 'Cancelar',
   loading = false,
   confirmButtonClass = 'bg-[#FF9E1B] hover:bg-[#FF9E1B]/90',
+  children
 }: ConfirmModalProps) {
   if (!isOpen) return null
 
@@ -39,6 +42,8 @@ export default function ConfirmModal({
 
         <h2 className="text-xl font-bold text-gray-900 mb-2 pr-8">{title}</h2>
         <p className="text-gray-600 mb-6">{message}</p>
+
+        {children && <div className="mb-6">{children}</div>}
 
         <div className="flex gap-3">
           <button

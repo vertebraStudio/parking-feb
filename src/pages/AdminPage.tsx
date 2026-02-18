@@ -69,7 +69,8 @@ export default function AdminPage() {
   const [spotsToBlock, setSpotsToBlock] = useState<number>(0) // Número de plazas a bloquear
   const [showConfirmedBookings, setShowConfirmedBookings] = useState<boolean>(false) // Mostrar reservas confirmadas
   const [userSearch, setUserSearch] = useState('') // Buscador de usuarios en pestaña de usuarios
-  
+  const [bookingSearch, setBookingSearch] = useState('') // Buscador de reservas por nombre
+
   // Estados para modales
   const [showBlockModal, setShowBlockModal] = useState(false)
   const [showConfirmBookingModal, setShowConfirmBookingModal] = useState(false)
@@ -78,6 +79,7 @@ export default function AdminPage() {
   const [bookingToConfirm, setBookingToConfirm] = useState<BookingWithSpot | null>(null)
   const [bookingToReject, setBookingToReject] = useState<BookingWithSpot | null>(null)
   const [bookingToWaitlist, setBookingToWaitlist] = useState<BookingWithSpot | null>(null)
+  const [waitlistReason, setWaitlistReason] = useState('')
   const [processing, setProcessing] = useState(false)
   const loadingBookingsRef = useRef(false)
   // const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set()) // Eliminado - no se usa
@@ -461,7 +463,7 @@ export default function AdminPage() {
       console.log('loadBookings already in progress, skipping...')
       return
     }
-    
+
     console.log('loadBookings called')
     loadingBookingsRef.current = true
     setLoadingBookings(true)
@@ -470,7 +472,7 @@ export default function AdminPage() {
       let query = supabase
         .from('bookings')
         .select('*')
-        // No filtrar canceladas para que se muestren en negro
+      // No filtrar canceladas para que se muestren en negro
 
       // Filtrar por la semana seleccionada (lunes a viernes)
       const monday = new Date(selectedWeekMonday)
@@ -496,10 +498,27 @@ export default function AdminPage() {
         return
       }
 
+      // Normalizar estado legacy 'pending' → 'waitlist'
+      const pendingIds = (bookingsData || []).filter((b: any) => b.status === 'pending').map((b: any) => b.id)
+      if (pendingIds.length > 0) {
+        console.warn('⚠️ Migrando reservas legacy pending → waitlist (AdminPage):', pendingIds.length)
+        supabase
+          .from('bookings')
+          .update({ status: 'waitlist', spot_id: null })
+          .in('id', pendingIds)
+          .then(({ error }) => {
+            if (error) console.error('Error migrating pending → waitlist (AdminPage):', error)
+          })
+      }
+
+      const normalizedBookingsData = (bookingsData || []).map((b: any) =>
+        b.status === 'pending' ? { ...b, status: 'waitlist', spot_id: null } : b
+      )
+
       // Cargar información de plazas y usuarios
-      if (bookingsData && bookingsData.length > 0) {
-        const spotIds = [...new Set(bookingsData.map(b => b.spot_id))]
-        const userIds = [...new Set(bookingsData.map(b => b.user_id))]
+      if (normalizedBookingsData && normalizedBookingsData.length > 0) {
+        const spotIds = [...new Set(normalizedBookingsData.map((b: any) => b.spot_id).filter((id: any) => id !== null))]
+        const userIds = [...new Set(normalizedBookingsData.map((b: any) => b.user_id))]
 
         const [spotsResult, usersResult] = await Promise.all([
           supabase.from('parking_spots').select('*').in('id', spotIds),
@@ -514,7 +533,7 @@ export default function AdminPage() {
         }
 
         // Cargar relaciones de carpool múltiple para las reservas
-        const bookingIds = bookingsData.map(b => b.id)
+        const bookingIds = normalizedBookingsData.map((b: any) => b.id)
         const { data: carpoolLinks, error: carpoolLinksError } = await supabase
           .from('booking_carpool_users')
           .select('*')
@@ -524,20 +543,20 @@ export default function AdminPage() {
           console.error('Error loading booking_carpool_users (bookings tab):', carpoolLinksError)
         }
 
-        const legacyCarpoolIds = bookingsData
+        const legacyCarpoolIds = normalizedBookingsData
           .map(b => b.carpool_with_user_id)
           .filter((id): id is string => id !== null)
 
         const linksUserIds = (carpoolLinks || []).map(link => link.user_id as string)
         const allCarpoolUserIds = Array.from(new Set([...legacyCarpoolIds, ...linksUserIds]))
-        
+
         let carpoolProfilesMap = new Map<string, Profile>()
         if (allCarpoolUserIds.length > 0) {
           const { data: carpoolProfilesData } = await supabase
             .from('profiles')
             .select('*')
             .in('id', allCarpoolUserIds)
-          
+
           if (carpoolProfilesData) {
             carpoolProfilesData.forEach(profile => {
               carpoolProfilesMap.set(profile.id, profile)
@@ -545,7 +564,7 @@ export default function AdminPage() {
           }
         }
 
-        const bookingsWithDetails: BookingWithSpot[] = bookingsData.map(booking => {
+        const bookingsWithDetails: BookingWithSpot[] = normalizedBookingsData.map((booking: any) => {
           const spot = spotsResult.data?.find(s => s.id === booking.spot_id)
           const userProfile = usersResult.data?.find(u => u.id === booking.user_id)
 
@@ -629,9 +648,9 @@ export default function AdminPage() {
 
       // Obtener IDs de plazas normales para filtrar
       const normalSpotIds = spots.map(s => s.id)
-      
+
       // Filtrar solo los bloqueos de plazas normales
-      const normalSpotBlocks = (blocksData || []).filter(block => 
+      const normalSpotBlocks = (blocksData || []).filter(block =>
         normalSpotIds.includes(block.spot_id)
       )
 
@@ -672,10 +691,10 @@ export default function AdminPage() {
     try {
       // Obtener las plazas que ya están bloqueadas para esta fecha
       const blockedSpotIds = spotBlocks.map(b => b.spot_id)
-      
+
       // Obtener las plazas disponibles (no bloqueadas)
       const availableSpots = spots.filter(spot => !blockedSpotIds.includes(spot.id))
-      
+
       // Si ya hay bloqueos, primero eliminarlos todos para esta fecha
       if (spotBlocks.length > 0) {
         const { error: deleteError } = await supabase
@@ -693,7 +712,7 @@ export default function AdminPage() {
 
       // Bloquear el número de plazas solicitado (tomar las primeras disponibles)
       const spotsToBlockList = availableSpots.slice(0, spotsToBlock)
-      
+
       if (spotsToBlockList.length > 0) {
         const blocksToInsert = spotsToBlockList.map(spot => ({
           spot_id: spot.id,
@@ -746,121 +765,17 @@ export default function AdminPage() {
 
       if (error) throw error
 
-      // Obtener la reserva para crear la notificación
-      const { data: booking, error: bookingError } = await supabase
-        .from('bookings')
-        .select('id, user_id, date, status')
-        .eq('id', bookingId)
-        .single()
-
-      if (!bookingError && booking) {
-        // La Edge Function se encarga de crear la notificación in-app y enviar push
-        // No necesitamos crear la notificación aquí para evitar duplicados
-        // Intentar enviar push vía Edge Function (no bloquea si falla)
-        try {
-          console.log('Calling Edge Function notify-booking-confirmed with bookingId:', bookingId)
-          
-          // Verificar que hay sesión activa
-          const { data: { session }, error: sessionError } = await supabase.auth.getSession()
-          
-          if (sessionError) {
-            console.error('Error getting session:', sessionError)
-            throw new Error('No hay sesión activa')
-          }
-          
-          if (!session) {
-            console.error('No active session found')
-            throw new Error('No hay sesión activa')
-          }
-          
-          console.log('Session token available:', !!session.access_token)
-          
-          // Intentar primero con supabase.functions.invoke() (pasa token automáticamente)
-          let pushResult: any = null
-          let pushErr: any = null
-          
-          try {
-            const result = await supabase.functions.invoke('notify-booking-confirmed', {
-              body: { bookingId },
-            })
-            pushResult = result.data
-            pushErr = result.error
-            console.log('supabase.functions.invoke() result:', { data: pushResult, error: pushErr })
-          } catch (invokeError: any) {
-            // Si falla, intentar con fetch directo como fallback
-            console.warn('⚠️ supabase.functions.invoke() failed, trying direct fetch:', invokeError)
-            console.log('Error details:', {
-              message: invokeError.message,
-              name: invokeError.name,
-              status: invokeError.status,
-            })
-            
-            const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-            const functionUrl = `${supabaseUrl}/functions/v1/notify-booking-confirmed`
-            
-            console.log('Attempting direct fetch to:', functionUrl)
-            console.log('Using token:', session.access_token ? `${session.access_token.substring(0, 20)}...` : 'NO TOKEN')
-            
-            try {
-              const response = await fetch(functionUrl, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${session.access_token}`,
-                  'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY || '',
-                },
-                body: JSON.stringify({ bookingId }),
-              })
-              
-              console.log('Direct fetch response:', {
-                status: response.status,
-                statusText: response.statusText,
-                ok: response.ok,
-              })
-              
-              if (!response.ok) {
-                const errorText = await response.text()
-                console.error('Direct fetch error response:', errorText)
-                throw new Error(`Edge Function returned ${response.status}: ${errorText}`)
-              }
-              
-              pushResult = await response.json()
-              console.log('Direct fetch success, result:', pushResult)
-            } catch (fetchError: any) {
-              console.error('❌ Direct fetch also failed:', fetchError)
-              throw fetchError
-            }
-          }
-          
-          if (pushErr) {
-            console.error('❌ Edge Function error:', pushErr)
-          } else {
-            console.log('✅ Edge Function response:', pushResult)
-            if (pushResult?.pushed === 0) {
-              console.warn('⚠️ No push tokens found for user or FCM_SERVER_KEY not set')
-            } else if (pushResult?.fcm?.failure > 0) {
-              console.error('❌ FCM delivery failures:', pushResult.fcm)
-            } else if (pushResult?.pushed > 0) {
-              console.log('✅ Push notification sent successfully to', pushResult.pushed, 'device(s)')
-            }
-          }
-        } catch (pushErr: any) {
-          console.error('❌ Push notification failed (non-blocking):', pushErr)
-          console.error('Error details:', {
-            message: pushErr.message,
-            cause: pushErr.cause,
-            stack: pushErr.stack,
-          })
-        }
-      }
+      // La notificación in-app y push se envían automáticamente
+      // a través del Database Webhook configurado en Supabase.
+      // No llamamos a la Edge Function manualmente para evitar duplicados.
 
       // Cerrar el modal primero
       setShowConfirmBookingModal(false)
       setBookingToConfirm(null)
-      
+
       // Esperar un momento antes de recargar para asegurar que la BD se actualizó
       await new Promise(resolve => setTimeout(resolve, 200))
-      
+
       // Recargar las reservas según la pestaña activa
       if (activeTab === 'summary') {
         await loadBookingsForWeek(summaryWeekMonday)
@@ -897,18 +812,15 @@ export default function AdminPage() {
 
       if (error) throw error
 
-      // Si se cancela una reserva activa (confirmed o pending), promover desde waitlist
-      if (bookingToReject.status === 'confirmed' || bookingToReject.status === 'pending') {
-        await promoteFromWaitlist(bookingToReject.date)
-      }
+      // Ya no existe el estado 'pending' ni la promoción automática desde waitlist
 
       // Cerrar el modal primero
       setShowRejectBookingModal(false)
       setBookingToReject(null)
-      
+
       // Esperar un momento antes de recargar para asegurar que la BD se actualizó
       await new Promise(resolve => setTimeout(resolve, 200))
-      
+
       // Recargar las reservas según la pestaña activa
       if (activeTab === 'summary') {
         await loadBookingsForWeek(summaryWeekMonday)
@@ -928,6 +840,7 @@ export default function AdminPage() {
 
   const handleWaitlistBooking = (booking: BookingWithSpot) => {
     setBookingToWaitlist(booking)
+    setWaitlistReason('')
     setShowWaitlistModal(true)
   }
 
@@ -938,26 +851,35 @@ export default function AdminPage() {
     setError(null)
     try {
       // Devolver desde confirmed a waitlist
-      // El botón "Devolver a la lista de espera" solo aparece para reservas confirmadas
       const { error } = await supabase
         .from('bookings')
-        .update({ status: 'waitlist' })
+        .update({ status: 'waitlist', spot_id: null, created_at: new Date().toISOString() })
         .eq('id', bookingToWaitlist.id)
 
       if (error) throw error
 
-      // Si se devuelve una reserva confirmada a waitlist, promover la siguiente de la lista
-      if (bookingToWaitlist.status === 'confirmed') {
-        await promoteFromWaitlist(bookingToWaitlist.date)
-      }
+      // Enviar notificación al usuario con el motivo (si se ha indicado)
+      const reason = waitlistReason.trim()
+      const body = reason
+        ? `Tu reserva del ${formatDateDisplay(bookingToWaitlist.date)} ha sido devuelta a la lista de espera.\n**Motivo:** ${reason}`
+        : `Tu reserva del ${formatDateDisplay(bookingToWaitlist.date)} ha sido devuelta a la lista de espera.`
 
-      // Cerrar el modal primero
+      await supabase.from('notifications').insert({
+        user_id: bookingToWaitlist.user_id,
+        type: 'booking_waitlisted',
+        title: 'Reserva en lista de espera',
+        body,
+        data: { bookingId: bookingToWaitlist.id, date: bookingToWaitlist.date },
+      })
+
+      // Cerrar el modal
       setShowWaitlistModal(false)
       setBookingToWaitlist(null)
-      
+      setWaitlistReason('')
+
       // Esperar un momento antes de recargar para asegurar que la BD se actualizó
       await new Promise(resolve => setTimeout(resolve, 200))
-      
+
       // Recargar las reservas según la pestaña activa
       if (activeTab === 'summary') {
         await loadBookingsForWeek(summaryWeekMonday)
@@ -975,86 +897,7 @@ export default function AdminPage() {
     }
   }
 
-  // Función para promover desde waitlist cuando se cancela una reserva activa
-  const promoteFromWaitlist = async (date: string) => {
-    try {
-      // Verificar que realmente haya espacio disponible (menos de 8 plazas ocupadas, excluyendo directivos)
-      const { data: activeBookings } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('date', date)
-        .neq('status', 'cancelled')
-        .in('status', ['confirmed', 'pending'])
-
-      if (activeBookings && activeBookings.length > 0) {
-        // Cargar perfiles para filtrar directivos
-        const userIds = [...new Set(activeBookings.map(b => b.user_id))]
-        const { data: profilesData } = await supabase
-          .from('profiles')
-          .select('id, role')
-          .in('id', userIds)
-
-        // Crear un mapa de roles
-        const roleMap = new Map<string, string>()
-        profilesData?.forEach(p => roleMap.set(p.id, p.role))
-
-        // Filtrar reservas de directivos del conteo
-        const normalBookingsCount = activeBookings.filter(b => {
-          const userRole = roleMap.get(b.user_id)
-          return userRole !== 'directivo'
-        }).length
-
-        // Si ya hay 8 o más plazas ocupadas (sin contar directivos), no promover
-        if (normalBookingsCount >= 8) {
-          return
-        }
-      }
-
-      // Buscar el primero en la lista de espera para esa fecha (ordenado por created_at, excluyendo directivos)
-      const { data: waitlistEntries } = await supabase
-        .from('bookings')
-        .select('*')
-        .eq('date', date)
-        .eq('status', 'waitlist')
-        .order('created_at', { ascending: true })
-
-      if (waitlistEntries && waitlistEntries.length > 0) {
-        // Cargar perfiles para filtrar directivos
-        const waitlistUserIds = [...new Set(waitlistEntries.map(b => b.user_id))]
-        const { data: waitlistProfilesData } = await supabase
-          .from('profiles')
-          .select('id, role')
-          .in('id', waitlistUserIds)
-
-        // Crear un mapa de roles
-        const waitlistRoleMap = new Map<string, string>()
-        waitlistProfilesData?.forEach(p => waitlistRoleMap.set(p.id, p.role))
-
-        // Filtrar directivos y obtener el primero
-        const normalWaitlistEntries = waitlistEntries.filter(b => {
-          const userRole = waitlistRoleMap.get(b.user_id)
-          return userRole !== 'directivo'
-        })
-
-        if (normalWaitlistEntries.length > 0) {
-          const firstWaitlist = normalWaitlistEntries[0]
-          
-          // Promover a pending
-          const { error: promoteError } = await supabase
-            .from('bookings')
-            .update({ status: 'pending' })
-            .eq('id', firstWaitlist.id)
-
-          if (promoteError) {
-            console.error('Error promoting from waitlist:', promoteError)
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Error in promoteFromWaitlist:', err)
-    }
-  }
-
+  // Ya no existe el estado 'pending' ni la promoción automática desde waitlist
   // Función eliminada - no se usa
   // const formatDate = (dateString: string) => {
   //   const date = new Date(dateString)
@@ -1115,7 +958,7 @@ export default function AdminPage() {
     const today = new Date()
     const tomorrow = new Date(today)
     tomorrow.setDate(tomorrow.getDate() + 1)
-    
+
     if (dateString === today.toISOString().split('T')[0]) {
       return 'Hoy'
     } else if (dateString === tomorrow.toISOString().split('T')[0]) {
@@ -1133,11 +976,11 @@ export default function AdminPage() {
   // Calcular la posición en la lista de espera para una reserva
   const getWaitlistPosition = (booking: BookingWithSpot): number | null => {
     if (booking.status !== 'waitlist') return null
-    
+
     // Obtener todas las reservas en waitlist para el mismo día, ordenadas por created_at
     const waitlistBookings = bookings
-      .filter(b => 
-        b.date === booking.date && 
+      .filter(b =>
+        b.date === booking.date &&
         b.status === 'waitlist' &&
         b.user?.role !== 'directivo' // Excluir directivos
       )
@@ -1147,7 +990,7 @@ export default function AdminPage() {
         const dateB = new Date(b.created_at).getTime()
         return dateA - dateB
       })
-    
+
     // Encontrar la posición de esta reserva
     const position = waitlistBookings.findIndex(b => b.id === booking.id)
     return position >= 0 ? position + 1 : null // +1 porque las posiciones empiezan en 1
@@ -1168,9 +1011,9 @@ export default function AdminPage() {
       <div className="p-4 min-h-screen flex items-center justify-center bg-white">
         <div className="text-center py-12 rounded-[20px] border border-gray-200 bg-gray-50 px-8">
           <Shield className="w-16 h-16 text-gray-300 mx-auto mb-4" strokeWidth={1.5} />
-          <h2 
+          <h2
             className="text-xl font-semibold text-gray-900 mb-2"
-            style={{ 
+            style={{
               fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
               letterSpacing: '-0.3px'
             }}
@@ -1189,29 +1032,29 @@ export default function AdminPage() {
   const searchTerm = userSearch.trim().toLowerCase()
   const filteredUnverifiedUsers = searchTerm
     ? unverifiedUsers.filter((p) => {
-        const name = (p.full_name || '').toLowerCase()
-        const email = (p.email || '').toLowerCase()
-        return name.includes(searchTerm) || email.includes(searchTerm)
-      })
+      const name = (p.full_name || '').toLowerCase()
+      const email = (p.email || '').toLowerCase()
+      return name.includes(searchTerm) || email.includes(searchTerm)
+    })
     : unverifiedUsers
 
   const filteredVerifiedUsers = searchTerm
     ? verifiedUsers.filter((p) => {
-        const name = (p.full_name || '').toLowerCase()
-        const email = (p.email || '').toLowerCase()
-        return name.includes(searchTerm) || email.includes(searchTerm)
-      })
+      const name = (p.full_name || '').toLowerCase()
+      const email = (p.email || '').toLowerCase()
+      return name.includes(searchTerm) || email.includes(searchTerm)
+    })
     : verifiedUsers
 
   return (
-    <div 
+    <div
       className="p-4 lg:p-6 pb-24 lg:pb-8 min-h-screen bg-white"
     >
       {/* Header con título y estadísticas rápidas en desktop */}
       <div className="lg:flex lg:items-end lg:justify-between mb-6">
-        <h1 
+        <h1
           className="text-3xl lg:text-4xl font-semibold text-gray-900 tracking-tight"
-          style={{ 
+          style={{
             fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
             letterSpacing: '-0.5px'
           }}
@@ -1241,7 +1084,7 @@ export default function AdminPage() {
       </div>
 
       {error && (
-        <div 
+        <div
           className="mb-4 p-4 rounded-[20px] border border-red-400/30"
           style={{
             backgroundColor: 'rgba(255, 59, 48, 0.15)',
@@ -1254,7 +1097,7 @@ export default function AdminPage() {
       )}
 
       {/* Tabs - iOS Style (mobile) / Larger tabs (desktop) */}
-      <div 
+      <div
         className="flex gap-1.5 mb-6 rounded-[20px] p-1.5 border border-gray-200 bg-gray-50 overflow-x-auto lg:gap-2 lg:p-2"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
@@ -1263,11 +1106,10 @@ export default function AdminPage() {
             setActiveTab('bookings')
             setError(null)
           }}
-          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
-            activeTab === 'bookings'
-              ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
-          }`}
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${activeTab === 'bookings'
+            ? 'text-white'
+            : 'text-gray-700 hover:text-gray-900 hover:bg-white'
+            }`}
           style={activeTab === 'bookings' ? {
             backgroundColor: '#FF9500',
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
@@ -1281,11 +1123,10 @@ export default function AdminPage() {
             setActiveTab('spots')
             setError(null)
           }}
-          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
-            activeTab === 'spots'
-              ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
-          }`}
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${activeTab === 'spots'
+            ? 'text-white'
+            : 'text-gray-700 hover:text-gray-900 hover:bg-white'
+            }`}
           style={activeTab === 'spots' ? {
             backgroundColor: '#FF9500',
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
@@ -1299,11 +1140,10 @@ export default function AdminPage() {
             setActiveTab('users')
             setError(null)
           }}
-          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
-            activeTab === 'users'
-              ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
-          }`}
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${activeTab === 'users'
+            ? 'text-white'
+            : 'text-gray-700 hover:text-gray-900 hover:bg-white'
+            }`}
           style={activeTab === 'users' ? {
             backgroundColor: '#FF9500',
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
@@ -1322,11 +1162,10 @@ export default function AdminPage() {
             setActiveTab('summary')
             setError(null)
           }}
-          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${
-            activeTab === 'summary'
-              ? 'text-white'
-              : 'text-gray-700 hover:text-gray-900 hover:bg-white'
-          }`}
+          className={`px-3 py-2 lg:px-5 lg:py-2.5 font-semibold text-xs sm:text-sm rounded-[12px] transition-all duration-200 active:scale-95 flex-shrink-0 lg:flex-1 ${activeTab === 'summary'
+            ? 'text-white'
+            : 'text-gray-700 hover:text-gray-900 hover:bg-white'
+            }`}
           style={activeTab === 'summary' ? {
             backgroundColor: '#FF9500',
             boxShadow: '0 2px 8px rgba(255, 149, 0, 0.3)'
@@ -1365,9 +1204,9 @@ export default function AdminPage() {
           {/* Usuarios sin verificar */}
           {unverifiedUsers.length > 0 && (
             <div>
-              <h2 
+              <h2
                 className="text-lg font-bold text-gray-900 mb-3"
-                style={{ 
+                style={{
                   fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
                   letterSpacing: '-0.2px'
                 }}
@@ -1379,47 +1218,47 @@ export default function AdminPage() {
                   const initials = getProfileInitials(profile)
                   const color = getFaceHashColor(profile.id || profile.email || initials)
                   return (
-                  <div
-                    key={profile.id}
-                    className="rounded-[20px] p-5 transition-all duration-200 bg-white border border-orange-200 hover:shadow-md"
-                  >
-                    <div className="flex items-start gap-3">
-                      {/* Avatar FaceHash */}
-                      <div
-                        className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-sm"
-                        style={{
-                          background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
-                        }}
-                      >
-                        {initials}
+                    <div
+                      key={profile.id}
+                      className="rounded-[20px] p-5 transition-all duration-200 bg-white border border-orange-200 hover:shadow-md"
+                    >
+                      <div className="flex items-start gap-3">
+                        {/* Avatar FaceHash */}
+                        <div
+                          className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-sm"
+                          style={{
+                            background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
+                          }}
+                        >
+                          {initials}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-gray-900 mb-0.5 truncate">{profile.full_name || 'Sin nombre'}</p>
+                          <p className="text-sm text-gray-500 truncate">{profile.email}</p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            Registrado: {new Date(profile.created_at).toLocaleDateString('es-ES')}
+                          </p>
+                        </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-gray-900 mb-0.5 truncate">{profile.full_name || 'Sin nombre'}</p>
-                        <p className="text-sm text-gray-500 truncate">{profile.email}</p>
-                        <p className="text-xs text-gray-400 mt-1">
-                          Registrado: {new Date(profile.created_at).toLocaleDateString('es-ES')}
-                        </p>
+                      <div className="mt-3 pt-3 border-t border-orange-100 flex gap-2">
+                        <button
+                          onClick={() => handleOpenVerifyUser(profile)}
+                          className="flex-1 px-3 py-2 text-xs sm:text-sm border border-green-200 text-green-700 rounded-[14px] font-semibold hover:bg-green-50 transition-colors active:scale-95 flex items-center justify-center gap-1.5"
+                          title="Aceptar usuario"
+                        >
+                          <CheckCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
+                          Aceptar
+                        </button>
+                        <button
+                          onClick={() => handleOpenDeleteUser(profile)}
+                          className="flex-1 px-3 py-2 text-xs sm:text-sm border border-red-200 text-red-600 rounded-[14px] font-semibold hover:bg-red-50 transition-colors active:scale-95 flex items-center justify-center gap-1.5"
+                          title="Eliminar usuario"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" strokeWidth={2.5} />
+                          Borrar
+                        </button>
                       </div>
                     </div>
-                    <div className="mt-3 pt-3 border-t border-orange-100 flex gap-2">
-                      <button
-                        onClick={() => handleOpenVerifyUser(profile)}
-                        className="flex-1 px-3 py-2 text-xs sm:text-sm border border-green-200 text-green-700 rounded-[14px] font-semibold hover:bg-green-50 transition-colors active:scale-95 flex items-center justify-center gap-1.5"
-                        title="Aceptar usuario"
-                      >
-                        <CheckCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
-                        Aceptar
-                      </button>
-                      <button
-                        onClick={() => handleOpenDeleteUser(profile)}
-                        className="flex-1 px-3 py-2 text-xs sm:text-sm border border-red-200 text-red-600 rounded-[14px] font-semibold hover:bg-red-50 transition-colors active:scale-95 flex items-center justify-center gap-1.5"
-                        title="Eliminar usuario"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" strokeWidth={2.5} />
-                        Borrar
-                      </button>
-                    </div>
-                  </div>
                   )
                 })}
               </div>
@@ -1428,9 +1267,9 @@ export default function AdminPage() {
 
           {/* Usuarios verificados */}
           <div>
-            <h2 
+            <h2
               className="text-lg font-bold text-gray-900 mb-3"
-              style={{ 
+              style={{
                 fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif',
                 letterSpacing: '-0.2px'
               }}
@@ -1443,41 +1282,41 @@ export default function AdminPage() {
                 const initials = getProfileInitials(profile)
                 const color = getFaceHashColor(profile.id || profile.email || initials)
                 return (
-                <div
-                  key={profile.id}
-                  onClick={() => navigate(`/profile/${profile.id}`)}
-                  className="rounded-[20px] p-4 transition-all duration-200 bg-white border border-gray-200 hover:shadow-md hover:border-gray-300 cursor-pointer group"
-                >
-                  <div className="flex items-center gap-3">
-                    {/* Avatar FaceHash */}
-                    <div
-                      className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-sm"
-                      style={{
-                        background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
-                      }}
-                    >
-                      {initials}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="font-semibold text-gray-900 truncate">{profile.full_name || 'Sin nombre'}</p>
-                        {isAdmin && (
-                          <span 
-                            className="px-2 py-0.5 text-[10px] font-bold text-white rounded-[6px] flex-shrink-0"
-                            style={{ backgroundColor: '#FF9500' }}
-                          >
-                            ADMIN
-                          </span>
-                        )}
-                        {profile.is_verified && profile.role === 'user' && (
-                          <CheckCircle className="w-4 h-4 flex-shrink-0" style={{ color: '#34C759' }} strokeWidth={2.5} />
-                        )}
+                  <div
+                    key={profile.id}
+                    onClick={() => navigate(`/profile/${profile.id}`)}
+                    className="rounded-[20px] p-4 transition-all duration-200 bg-white border border-gray-200 hover:shadow-md hover:border-gray-300 cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-3">
+                      {/* Avatar FaceHash */}
+                      <div
+                        className="flex-shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-xs font-semibold text-white shadow-sm"
+                        style={{
+                          background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${color}`,
+                        }}
+                      >
+                        {initials}
                       </div>
-                      <p className="text-sm text-gray-500 truncate">{profile.email}</p>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-gray-900 truncate">{profile.full_name || 'Sin nombre'}</p>
+                          {isAdmin && (
+                            <span
+                              className="px-2 py-0.5 text-[10px] font-bold text-white rounded-[6px] flex-shrink-0"
+                              style={{ backgroundColor: '#FF9500' }}
+                            >
+                              ADMIN
+                            </span>
+                          )}
+                          {profile.is_verified && profile.role === 'user' && (
+                            <CheckCircle className="w-4 h-4 flex-shrink-0" style={{ color: '#34C759' }} strokeWidth={2.5} />
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-500 truncate">{profile.email}</p>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-gray-300 flex-shrink-0 group-hover:text-gray-500 transition-colors" strokeWidth={2} />
                     </div>
-                    <ChevronRight className="w-5 h-5 text-gray-300 flex-shrink-0 group-hover:text-gray-500 transition-colors" strokeWidth={2} />
                   </div>
-                </div>
                 )
               })}
             </div>
@@ -1527,13 +1366,13 @@ export default function AdminPage() {
       {activeTab === 'spots' && (
         <div className="space-y-4 lg:grid lg:grid-cols-2 lg:gap-6 lg:space-y-0">
           {/* Selector de fecha y número de plazas */}
-          <div 
+          <div
             className="rounded-[20px] p-4 border border-gray-200 bg-gray-50 overflow-hidden lg:h-fit"
           >
             <label className="block text-sm font-semibold text-gray-900 mb-3">
               Bloquear plazas
             </label>
-            
+
             {/* Selector de fecha */}
             <div className="mb-4 min-w-0">
               <label className="block text-xs font-medium text-gray-700 mb-2">
@@ -1616,83 +1455,83 @@ export default function AdminPage() {
 
           {/* Estado de bloqueos - columna derecha en desktop */}
           <div className="space-y-4">
-          {/* Estado de carga */}
-          {loadingSpotBlocks && (
-            <div className="text-center py-4">
-              <p className="text-gray-600">Cargando bloqueos...</p>
-            </div>
-          )}
-
-          {/* Información de bloqueos actuales */}
-          {!loadingSpotBlocks && selectedSpotDate && (
-            <div className="rounded-[20px] p-4 border border-gray-200 bg-white">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-gray-900 mb-1">
-                    Plazas bloqueadas para {formatDateDisplay(selectedSpotDate)}
-                  </p>
-                  <p className="text-2xl font-bold text-gray-900">
-                    {spotBlocks.length} / 8
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Car className={`w-8 h-8 ${spotBlocks.length > 0 ? 'text-red-500' : 'text-green-500'}`} />
-                </div>
+            {/* Estado de carga */}
+            {loadingSpotBlocks && (
+              <div className="text-center py-4">
+                <p className="text-gray-600">Cargando bloqueos...</p>
               </div>
-              {spotBlocks.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-gray-200">
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-medium text-gray-600">Plazas bloqueadas:</p>
-                    <button
-                      onClick={async () => {
-                        if (!selectedSpotDate) return
-                        setProcessing(true)
-                        try {
-                          const { error } = await supabase
-                            .from('spot_blocks')
-                            .delete()
-                            .eq('date', selectedSpotDate)
+            )}
 
-                          if (error) {
-                            if (error.message?.includes('does not exist') || error.message?.includes('schema cache')) {
-                              throw new Error('La tabla de bloqueos no existe. Ejecuta create_spot_blocks.sql en Supabase.')
-                            }
-                            throw error
-                          }
-
-                          await loadSpotBlocks()
-                          setError(null)
-                        } catch (err: any) {
-                          console.error('Error deleting spot blocks:', err)
-                          setError(err.message || 'Error al eliminar los bloqueos')
-                        } finally {
-                          setProcessing(false)
-                        }
-                      }}
-                      disabled={processing}
-                      className="px-3 py-1.5 rounded-[8px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1.5 text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Unlock className="w-3.5 h-3.5" strokeWidth={2} />
-                      Eliminar bloqueos
-                    </button>
+            {/* Información de bloqueos actuales */}
+            {!loadingSpotBlocks && selectedSpotDate && (
+              <div className="rounded-[20px] p-4 border border-gray-200 bg-white">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900 mb-1">
+                      Plazas bloqueadas para {formatDateDisplay(selectedSpotDate)}
+                    </p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {spotBlocks.length} / 8
+                    </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {spotBlocks.map((block) => {
-                      const spot = spots.find(s => s.id === block.spot_id)
-                      return (
-                        <span
-                          key={block.id}
-                          className="px-2.5 py-1 rounded-[8px] text-xs font-semibold bg-red-100 text-red-700"
-                        >
-                          {spot?.label || `Plaza ${block.spot_id}`}
-                        </span>
-                      )
-                    })}
+                  <div className="flex items-center gap-2">
+                    <Car className={`w-8 h-8 ${spotBlocks.length > 0 ? 'text-red-500' : 'text-green-500'}`} />
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+                {spotBlocks.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-medium text-gray-600">Plazas bloqueadas:</p>
+                      <button
+                        onClick={async () => {
+                          if (!selectedSpotDate) return
+                          setProcessing(true)
+                          try {
+                            const { error } = await supabase
+                              .from('spot_blocks')
+                              .delete()
+                              .eq('date', selectedSpotDate)
+
+                            if (error) {
+                              if (error.message?.includes('does not exist') || error.message?.includes('schema cache')) {
+                                throw new Error('La tabla de bloqueos no existe. Ejecuta create_spot_blocks.sql en Supabase.')
+                              }
+                              throw error
+                            }
+
+                            await loadSpotBlocks()
+                            setError(null)
+                          } catch (err: any) {
+                            console.error('Error deleting spot blocks:', err)
+                            setError(err.message || 'Error al eliminar los bloqueos')
+                          } finally {
+                            setProcessing(false)
+                          }
+                        }}
+                        disabled={processing}
+                        className="px-3 py-1.5 rounded-[8px] text-xs font-medium transition-all duration-200 active:scale-95 flex items-center gap-1.5 text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Unlock className="w-3.5 h-3.5" strokeWidth={2} />
+                        Eliminar bloqueos
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {spotBlocks.map((block) => {
+                        const spot = spots.find(s => s.id === block.spot_id)
+                        return (
+                          <span
+                            key={block.id}
+                            className="px-2.5 py-1 rounded-[8px] text-xs font-semibold bg-red-100 text-red-700"
+                          >
+                            {spot?.label || `Plaza ${block.spot_id}`}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1700,117 +1539,134 @@ export default function AdminPage() {
       {activeTab === 'bookings' && (
         <div className="space-y-4">
           {/* Controles: selector de semana + filtro por día en la misma fila en desktop */}
-          <div className="lg:grid lg:grid-cols-2 lg:gap-4 space-y-4 lg:space-y-0">
-          {/* Selector de semana */}
-          <div 
-            className="p-4 bg-gray-50 rounded-[20px] border border-gray-200"
-          >
-            <div className="flex items-center justify-between">
-              <button
-                onClick={() => {
-                  const previousWeek = subDays(selectedWeekMonday, 7)
-                  setSelectedWeekMonday(previousWeek)
-                }}
-                className="flex-shrink-0 p-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
-                title="Semana anterior"
-              >
-                <ChevronLeft className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
-              </button>
-              
-              <div className="flex-1 text-center px-2">
+          <div className="space-y-4">
+            {/* Selector de semana */}
+            <div
+              className="p-4 bg-gray-50 rounded-[20px] border border-gray-200"
+            >
+              <div className="flex items-center justify-between">
                 <button
                   onClick={() => {
-                    const today = new Date()
-                    setSelectedWeekMonday(startOfWeek(today, { weekStartsOn: 1 }))
+                    const previousWeek = subDays(selectedWeekMonday, 7)
+                    setSelectedWeekMonday(previousWeek)
                   }}
-                  className="w-full px-4 py-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                  className="flex-shrink-0 p-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                  title="Semana anterior"
                 >
-                  <span className="text-sm font-semibold text-gray-900">
-                    {format(selectedWeekMonday, 'd MMM', { locale: es })} - {format(addDays(selectedWeekMonday, 4), 'd MMM', { locale: es })}
-                  </span>
+                  <ChevronLeft className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
+                </button>
+
+                <div className="flex-1 text-center px-2">
+                  <button
+                    onClick={() => {
+                      const today = new Date()
+                      setSelectedWeekMonday(startOfWeek(today, { weekStartsOn: 1 }))
+                    }}
+                    className="w-full px-4 py-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                  >
+                    <span className="text-sm font-semibold text-gray-900">
+                      {format(selectedWeekMonday, 'd MMM', { locale: es })} - {format(addDays(selectedWeekMonday, 4), 'd MMM', { locale: es })}
+                    </span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => {
+                    const nextWeek = addDays(selectedWeekMonday, 7)
+                    setSelectedWeekMonday(nextWeek)
+                  }}
+                  className="flex-shrink-0 p-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
+                  title="Semana siguiente"
+                >
+                  <ChevronRight className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
                 </button>
               </div>
-              
-              <button
-                onClick={() => {
-                  const nextWeek = addDays(selectedWeekMonday, 7)
-                  setSelectedWeekMonday(nextWeek)
-                }}
-                className="flex-shrink-0 p-2 rounded-[12px] transition-all duration-200 active:scale-95 bg-white border border-gray-300 hover:bg-gray-50 flex items-center justify-center"
-                title="Semana siguiente"
-              >
-                <ChevronRight className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
-              </button>
-            </div>
-          </div>
 
-          {/* Switch para mostrar/ocultar reservas confirmadas - solo móvil */}
-          <div 
-            className="rounded-[20px] p-4 border border-gray-200 bg-white lg:hidden"
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                {showConfirmedBookings ? (
-                  <Eye className="w-4 h-4 text-gray-600" strokeWidth={2} />
-                ) : (
-                  <EyeOff className="w-4 h-4 text-gray-400" strokeWidth={2} />
-                )}
-                <span className="text-sm font-semibold text-gray-900">
-                  Mostrar reservas confirmadas
-                </span>
-              </div>
-              <button
-                onClick={() => setShowConfirmedBookings(!showConfirmedBookings)}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 ${
-                  showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    showConfirmedBookings ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
             </div>
-          </div>
 
-          {/* Botones de días de la semana */}
-          <div 
-            className="rounded-[20px] p-4 border border-gray-200 bg-gray-50"
-          >
-            <p className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wider lg:hidden">
-              Ver reservas por día
-            </p>
-            <div className="flex gap-1.5 overflow-x-auto lg:flex-wrap">
-              <button
-                onClick={() => setSelectedDayForList(null)}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-[10px] border transition-all duration-200 active:scale-95 text-xs font-semibold whitespace-nowrap ${
-                  selectedDayForList === null
-                    ? 'bg-gray-800 border-gray-800 text-white'
-                    : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                Todas
-              </button>
-              {getDayLetters().map((letter, index) => {
-                const isSelected = selectedDayForList === index
-                
-                return (
-                  <button
-                    key={index}
-                    onClick={() => setSelectedDayForList(isSelected ? null : index)}
-                    className={`flex-shrink-0 px-3 py-1.5 rounded-[10px] border transition-all duration-200 active:scale-95 text-xs font-semibold whitespace-nowrap ${
-                      isSelected
-                        ? 'bg-gray-800 border-gray-800 text-white'
-                        : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+            {/* Switch para mostrar/ocultar reservas confirmadas - solo móvil */}
+            <div
+              className="rounded-[20px] p-4 border border-gray-200 bg-white lg:hidden"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {showConfirmedBookings ? (
+                    <Eye className="w-4 h-4 text-gray-600" strokeWidth={2} />
+                  ) : (
+                    <EyeOff className="w-4 h-4 text-gray-400" strokeWidth={2} />
+                  )}
+                  <span className="text-sm font-semibold text-gray-900">
+                    Mostrar reservas confirmadas
+                  </span>
+                </div>
+                <button
+                  onClick={() => setShowConfirmedBookings(!showConfirmedBookings)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 ${showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
                     }`}
-                  >
-                    {letter}
-                  </button>
-                )
-              })}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${showConfirmedBookings ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                  />
+                </button>
+              </div>
             </div>
-          </div>
+
+            <div className="space-y-4">
+              {/* Botones de días de la semana */}
+              <div
+                className="rounded-[20px] p-4 border border-gray-200 bg-gray-50"
+              >
+                <p className="text-xs font-semibold text-gray-600 mb-3 uppercase tracking-wider lg:hidden">
+                  Ver reservas por día
+                </p>
+                <div className="flex gap-1.5 overflow-x-auto lg:flex-wrap">
+                  <button
+                    onClick={() => setSelectedDayForList(null)}
+                    className={`flex-shrink-0 lg:flex-1 px-3 py-1.5 rounded-[10px] border transition-all duration-200 active:scale-95 text-xs font-semibold whitespace-nowrap ${selectedDayForList === null
+                      ? 'bg-gray-800 border-gray-800 text-white'
+                      : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                      }`}
+                  >
+                    Todas
+                  </button>
+                  {getDayLetters().map((letter, index) => {
+                    const isSelected = selectedDayForList === index
+                    const fullDayNames = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes']
+
+                    return (
+                      <button
+                        key={index}
+                        onClick={() => setSelectedDayForList(isSelected ? null : index)}
+                        className={`flex-shrink-0 lg:flex-1 px-3 py-1.5 rounded-[10px] border transition-all duration-200 active:scale-95 text-xs font-semibold whitespace-nowrap ${isSelected
+                          ? 'bg-gray-800 border-gray-800 text-white'
+                          : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                      >
+                        <span className="lg:hidden">{letter}</span>
+                        <span className="hidden lg:inline">{fullDayNames[index]}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Buscador de reservas */}
+              <div className="p-4 bg-gray-50 rounded-[20px] border border-gray-200">
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Search className="h-4 w-4 text-gray-400" />
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="Buscar reserva por nombre..."
+                    value={bookingSearch}
+                    onChange={(e) => setBookingSearch(e.target.value)}
+                    className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-[12px] leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-orange-500 focus:border-orange-500 sm:text-sm transition duration-150 ease-in-out"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Vista de lista por día o todas las reservas */}
@@ -1827,14 +1683,39 @@ export default function AdminPage() {
                     if (b.status === 'cancelled') return false
                     // Filtrar reservas confirmadas si el switch está desactivado
                     if (!showConfirmedBookings && b.status === 'confirmed') return false
+
+                    // Filtro de búsqueda
+                    if (bookingSearch.trim()) {
+                      const searchLower = bookingSearch.toLowerCase().trim()
+                      const userName = (b.user?.full_name || '').toLowerCase()
+                      const userEmail = (b.user?.email || '').toLowerCase()
+                      return userName.includes(searchLower) || userEmail.includes(searchLower)
+                    }
+
                     return true
                   })
                   .sort((a, b) => {
-                    // Ordenar: pending primero, luego waitlist, luego confirmed
-                    const order = { pending: 0, waitlist: 1, confirmed: 2 }
-                    return (order[a.status as keyof typeof order] || 3) - (order[b.status as keyof typeof order] || 3)
+                    // 1. Determinar prioridad por estado
+                    const order = showConfirmedBookings
+                      ? { confirmed: 0, waitlist: 1 }
+                      : { waitlist: 0, confirmed: 1 }
+
+                    const scoreA = order[a.status as keyof typeof order] ?? 2
+                    const scoreB = order[b.status as keyof typeof order] ?? 2
+
+                    if (scoreA !== scoreB) {
+                      return scoreA - scoreB
+                    }
+
+                    // 2. Si ambos son 'confirmed', ordenar por fecha de confirmación (updated_at)
+                    if (a.status === 'confirmed' && b.status === 'confirmed') {
+                      return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
+                    }
+
+                    // 3. Fallback: Mantener orden original (created_at ascendente)
+                    return 0
                   })
-                
+
                 return (
                   <div>
                     <div className="mb-4 flex items-center justify-between">
@@ -1847,26 +1728,19 @@ export default function AdminPage() {
                           <span className="text-xs font-medium text-gray-500">Confirmadas</span>
                           <button
                             onClick={() => setShowConfirmedBookings(!showConfirmedBookings)}
-                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-                              showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
-                            }`}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
+                              }`}
                           >
                             <span
-                              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                                showConfirmedBookings ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                              }`}
+                              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${showConfirmedBookings ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                                }`}
                             />
                           </button>
                         </label>
-                        <button
-                          onClick={() => setSelectedDayForList(null)}
-                          className="px-3 py-1.5 rounded-[8px] text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
-                        >
-                          Ver todas
-                        </button>
+
                       </div>
                     </div>
-                    
+
                     {dayBookings.length === 0 ? (
                       <div className="text-center py-12 rounded-[20px] border border-gray-200 bg-gray-50">
                         <User className="w-16 h-16 text-gray-300 mx-auto mb-4" />
@@ -1876,17 +1750,14 @@ export default function AdminPage() {
                       <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
                         {dayBookings.map((booking) => {
                           const userName = booking.user?.full_name || booking.user?.email?.split('@')[0] || 'Usuario desconocido'
-                          
+
                           return (
                             <div
                               key={booking.id}
-                              className={`p-3 rounded-[14px] border transition-all ${
-                                booking.status === 'pending'
-                                  ? 'border-orange-200 bg-white shadow-sm'
-                                  : booking.status === 'waitlist'
-                                  ? 'border-purple-200 bg-white shadow-sm'
-                                  : 'border-green-200 bg-white shadow-sm'
-                              }`}
+                              className={`p-3 rounded-[14px] border transition-all ${booking.status === 'waitlist'
+                                ? 'border-purple-200 bg-white shadow-sm'
+                                : 'border-green-200 bg-white shadow-sm'
+                                }`}
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="flex-1 min-w-0">
@@ -1921,26 +1792,23 @@ export default function AdminPage() {
                                       </span>
                                     )}
                                     <span
-                                      className={`inline-block px-2.5 py-1 text-xs font-semibold rounded-[6px] ${
-                                        booking.status === 'confirmed'
-                                          ? 'bg-green-100 text-green-700'
-                                          : booking.status === 'waitlist'
-                                          ? 'bg-purple-100 text-purple-700'
-                                          : 'bg-orange-100 text-orange-700'
-                                      }`}
-                                    >
-                                      {booking.status === 'confirmed' 
-                                        ? 'Confirmada' 
+                                      className={`inline-block px-2.5 py-1 text-xs font-semibold rounded-[6px] ${booking.status === 'confirmed'
+                                        ? 'bg-green-100 text-green-700'
                                         : booking.status === 'waitlist'
-                                        ? 'Lista de espera'
-                                        : 'Pendiente'}
+                                          ? 'bg-purple-100 text-purple-700'
+                                          : 'bg-purple-100 text-purple-700'
+                                        }`}
+                                    >
+                                      {booking.status === 'confirmed'
+                                        ? 'Confirmada'
+                                        : 'Lista de espera'}
                                     </span>
                                   </div>
                                 </div>
                               </div>
-                              
+
                               <div className="mt-3 pt-3 border-t border-gray-100">
-                                {(booking.status === 'waitlist' || booking.status === 'pending') ? (
+                                {booking.status === 'waitlist' ? (
                                   <button
                                     onClick={() => handleConfirmBooking(booking)}
                                     className="w-full px-3 py-2 rounded-[10px] font-medium text-xs transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5 text-white"
@@ -1985,19 +1853,17 @@ export default function AdminPage() {
                   <span className="text-xs font-medium text-gray-500">Confirmadas</span>
                   <button
                     onClick={() => setShowConfirmedBookings(!showConfirmedBookings)}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-                      showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
-                    }`}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${showConfirmedBookings ? 'bg-orange-500' : 'bg-gray-300'
+                      }`}
                   >
                     <span
-                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                        showConfirmedBookings ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                      }`}
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${showConfirmedBookings ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                        }`}
                     />
                   </button>
                 </label>
               </div>
-              
+
               {bookings.length === 0 ? (
                 <div className="text-center py-12 rounded-[20px] border border-gray-200 bg-gray-50">
                   <Calendar className="w-16 h-16 text-gray-300 mx-auto mb-4" />
@@ -2010,29 +1876,35 @@ export default function AdminPage() {
                       if (b.status === 'cancelled') return false
                       // Filtrar reservas confirmadas si el switch está desactivado
                       if (!showConfirmedBookings && b.status === 'confirmed') return false
+
+                      // Filtro de búsqueda
+                      if (bookingSearch.trim()) {
+                        const searchLower = bookingSearch.toLowerCase().trim()
+                        const userName = (b.user?.full_name || '').toLowerCase()
+                        const userEmail = (b.user?.email || '').toLowerCase()
+                        return userName.includes(searchLower) || userEmail.includes(searchLower)
+                      }
+
                       return true
                     })
                     .sort((a, b) => {
                       // Ordenar por fecha, luego por estado
                       const dateCompare = a.date.localeCompare(b.date)
                       if (dateCompare !== 0) return dateCompare
-                      const order = { pending: 0, waitlist: 1, confirmed: 2 }
-                      return (order[a.status as keyof typeof order] || 3) - (order[b.status as keyof typeof order] || 3)
+                      const order = { waitlist: 0, confirmed: 1 }
+                      return (order[a.status as keyof typeof order] ?? 2) - (order[b.status as keyof typeof order] ?? 2)
                     })
                     .map((booking) => {
                       const userName = booking.user?.full_name || booking.user?.email?.split('@')[0] || 'Usuario desconocido'
                       const bookingDate = format(new Date(booking.date), 'EEEE, d \'de\' MMMM', { locale: es })
-                      
+
                       return (
                         <div
                           key={booking.id}
-                          className={`p-3 rounded-[14px] border transition-all ${
-                            booking.status === 'pending'
-                              ? 'border-orange-200 bg-white shadow-sm'
-                              : booking.status === 'waitlist'
-                              ? 'border-purple-200 bg-white shadow-sm'
-                              : 'border-green-200 bg-white shadow-sm'
-                          }`}
+                          className={`p-3 rounded-[14px] border transition-all ${booking.status === 'waitlist'
+                            ? 'border-purple-200 bg-white shadow-sm'
+                            : 'border-green-200 bg-white shadow-sm'
+                            }`}
                         >
                           <div className="flex items-start justify-between gap-3 mb-3">
                             <div className="flex-1 min-w-0">
@@ -2063,33 +1935,21 @@ export default function AdminPage() {
                               )}
                             </div>
                             <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                              <div className="flex items-center gap-1.5">
-                                {booking.status === 'waitlist' && getWaitlistPosition(booking) && (
-                                  <span className="px-2 py-0.5 text-xs font-bold rounded-[6px] bg-purple-600 text-white">
-                                    #{getWaitlistPosition(booking)}
-                                  </span>
-                                )}
-                                <span
-                                  className={`inline-block px-2.5 py-1 text-xs font-semibold rounded-[6px] ${
-                                    booking.status === 'confirmed'
-                                      ? 'bg-green-100 text-green-700'
-                                      : booking.status === 'waitlist'
-                                      ? 'bg-purple-100 text-purple-700'
-                                      : 'bg-orange-100 text-orange-700'
+                              <span
+                                className={`inline-block px-2.5 py-1 text-xs font-semibold rounded-[6px] ${booking.status === 'confirmed'
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-purple-100 text-purple-700'
                                   }`}
-                                >
-                                  {booking.status === 'confirmed' 
-                                    ? 'Confirmada' 
-                                    : booking.status === 'waitlist'
-                                    ? 'Lista de espera'
-                                    : 'Pendiente'}
-                                </span>
-                              </div>
+                              >
+                                {booking.status === 'confirmed'
+                                  ? 'Confirmada'
+                                  : 'Lista de espera'}
+                              </span>
                             </div>
                           </div>
-                          
+
                           <div className="mt-3 pt-3 border-t border-gray-100">
-                            {(booking.status === 'waitlist' || booking.status === 'pending') ? (
+                            {booking.status === 'waitlist' ? (
                               <button
                                 onClick={() => handleConfirmBooking(booking)}
                                 className="w-full px-3 py-2 rounded-[10px] font-medium text-xs transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5 text-white"
@@ -2133,7 +1993,7 @@ export default function AdminPage() {
       {activeTab === 'summary' && (
         <div className="space-y-4">
           {/* Selector de semana */}
-          <div 
+          <div
             className="mb-4 p-4 bg-gray-50 rounded-[20px] border border-gray-200"
           >
             <div className="flex items-center justify-between">
@@ -2147,7 +2007,7 @@ export default function AdminPage() {
               >
                 <ChevronLeft className="h-5 w-5 text-gray-700" strokeWidth={2.5} />
               </button>
-              
+
               <div className="flex-1 text-center px-2">
                 <button
                   onClick={() => {
@@ -2161,7 +2021,7 @@ export default function AdminPage() {
                   </span>
                 </button>
               </div>
-              
+
               <button
                 onClick={() => {
                   const nextWeek = addDays(summaryWeekMonday, 7)
@@ -2183,40 +2043,40 @@ export default function AdminPage() {
               weekDays.push(addDays(summaryWeekMonday, i))
             }
             const dayLabels = ['L', 'M', 'X', 'J', 'V']
-            
+
             // Crear mapa de reservas por usuario y día
             const bookingsMap = new Map<string, Map<string, BookingWithSpot>>()
             const dayTotals = new Map<string, number>()
             const usersWithBookings = new Set<string>()
-            
+
             // Inicializar totales por día
             weekDays.forEach(day => {
               const dayStr = format(day, 'yyyy-MM-dd')
               dayTotals.set(dayStr, 0)
             })
-            
+
             // Procesar reservas confirmadas de la semana
             // Filtrar y procesar todas las reservas confirmadas
             const confirmedBookings = bookings.filter(b => {
               if (b.status !== 'confirmed') return false
               if (!b.user || b.user.role !== 'user') return false
-              
+
               const bookingDate = new Date(b.date)
               bookingDate.setHours(0, 0, 0, 0)
               const monday = new Date(summaryWeekMonday)
               monday.setHours(0, 0, 0, 0)
               const friday = addDays(monday, 4)
               friday.setHours(23, 59, 59, 999)
-              
+
               return bookingDate >= monday && bookingDate <= friday
             })
-            
+
             console.log('Reservas confirmadas para el resumen:', confirmedBookings.length, confirmedBookings)
-            
+
             confirmedBookings.forEach(booking => {
               const userId = booking.user_id
               const dateStr = booking.date
-              
+
               if (!bookingsMap.has(userId)) {
                 bookingsMap.set(userId, new Map())
               }
@@ -2225,18 +2085,18 @@ export default function AdminPage() {
               if (!existingBooking || new Date(booking.created_at) > new Date(existingBooking.created_at)) {
                 bookingsMap.get(userId)!.set(dateStr, booking)
               }
-              
+
               // Añadir usuario a la lista de usuarios con reservas
               usersWithBookings.add(userId)
-              
+
               // Incrementar total del día
               const currentTotal = dayTotals.get(dateStr) || 0
               dayTotals.set(dateStr, currentTotal + 1)
             })
-            
+
             // Obtener usuarios normales (no directivos, no admins) que tienen reservas O todos los usuarios verificados
             const normalUsers = profiles.filter(p => p.role === 'user' && p.is_verified)
-            
+
             // Incluir también usuarios que tienen reservas pero pueden no estar en profiles aún
             const allUserIds = new Set([...normalUsers.map(u => u.id), ...Array.from(usersWithBookings)])
             const usersToShow = Array.from(allUserIds).map(userId => {
@@ -2249,150 +2109,149 @@ export default function AdminPage() {
               }
               return null
             }).filter((u): u is Profile => u !== null)
-            
+
             // Calcular totales por usuario
             const userTotals = new Map<string, number>()
             bookingsMap.forEach((userBookings, userId) => {
               userTotals.set(userId, userBookings.size)
             })
-            
+
             // Ordenar usuarios alfabéticamente por nombre completo o email
             const sortedUsers = [...usersToShow].sort((a, b) => {
               const nameA = (a.full_name || a.email || '').toLowerCase().trim()
               const nameB = (b.full_name || b.email || '').toLowerCase().trim()
               return nameA.localeCompare(nameB, 'es', { sensitivity: 'base' })
             })
-            
+
             // Calcular total general
             const grandTotal = Array.from(userTotals.values()).reduce((sum, total) => sum + total, 0)
-            
+
             return (
               <>
-              {/* Resumen estadístico rápido - solo desktop */}
-              <div className="hidden lg:grid lg:grid-cols-3 gap-4 mb-4">
-                <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Total reservas</p>
-                  <p className="text-3xl font-bold text-gray-900">{grandTotal}</p>
+                {/* Resumen estadístico rápido - solo desktop */}
+                <div className="hidden lg:grid lg:grid-cols-3 gap-4 mb-4">
+                  <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Total reservas</p>
+                    <p className="text-3xl font-bold text-gray-900">{grandTotal}</p>
+                  </div>
+                  <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Usuarios</p>
+                    <p className="text-3xl font-bold text-gray-900">{sortedUsers.length}</p>
+                  </div>
+                  <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Media diaria</p>
+                    <p className="text-3xl font-bold text-gray-900">{weekDays.length > 0 ? (grandTotal / weekDays.length).toFixed(1) : '0'}</p>
+                  </div>
                 </div>
-                <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Usuarios</p>
-                  <p className="text-3xl font-bold text-gray-900">{sortedUsers.length}</p>
-                </div>
-                <div className="rounded-[16px] p-4 border border-gray-200 bg-white">
-                  <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Media diaria</p>
-                  <p className="text-3xl font-bold text-gray-900">{weekDays.length > 0 ? (grandTotal / weekDays.length).toFixed(1) : '0'}</p>
-                </div>
-              </div>
 
-              <div className="rounded-[20px] border border-gray-200 bg-white overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse">
-                    <thead>
-                      <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="px-4 py-3 lg:py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider sticky left-0 bg-gray-50 lg:min-w-[200px]">
-                          Usuario
-                        </th>
-                        {weekDays.map((day, index) => (
-                          <th 
-                            key={index}
-                            className="px-3 py-3 lg:py-4 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[60px] lg:min-w-[80px]"
-                          >
-                            {dayLabels[index]}
-                            <div className="text-[10px] font-normal text-gray-500 mt-0.5">
-                              {format(day, 'd/M')}
-                            </div>
+                <div className="rounded-[20px] border border-gray-200 bg-white overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-200">
+                          <th className="px-4 py-3 lg:py-4 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider sticky left-0 bg-gray-50 lg:min-w-[200px]">
+                            Usuario
                           </th>
-                        ))}
-                        <th className="px-4 py-3 lg:py-4 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-100">
-                          Total
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedUsers.map((user, userIndex) => {
-                        const userBookings = bookingsMap.get(user.id) || new Map()
-                        const userTotal = userTotals.get(user.id) || 0
-                        const userName = user.full_name || user.email?.split('@')[0] || 'Usuario'
-                        
-                        return (
-                          <tr 
-                            key={user.id}
-                            className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${
-                              userIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
-                            }`}
-                          >
-                            <td className="px-4 py-3 lg:py-4 text-sm font-medium text-gray-900 sticky left-0 bg-inherit">
-                              <span className="lg:flex lg:items-center lg:gap-2">
-                                <span 
-                                  className="hidden lg:inline-flex w-7 h-7 rounded-full items-center justify-center text-[10px] font-semibold text-white flex-shrink-0 shadow-sm"
-                                  style={{
-                                    background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${getFaceHashColor(user.id || user.email || userName)}`,
-                                  }}
-                                >
-                                  {getProfileInitials(user)}
-                                </span>
-                                {userName}
-                              </span>
-                            </td>
-                            {weekDays.map((day, dayIndex) => {
-                              const dayStr = format(day, 'yyyy-MM-dd')
-                              const hasBooking = userBookings.has(dayStr)
-                              
-                              return (
-                                <td 
-                                  key={dayIndex}
-                                  className="px-3 py-3 text-center"
-                                >
-                                  {hasBooking ? (
-                                    <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-green-500 text-white text-xs font-bold">
-                                      ✓
-                                    </div>
-                                  ) : (
-                                    <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-gray-100 text-gray-400 text-xs">
-                                      —
-                                    </div>
-                                  )}
-                                </td>
-                              )
-                            })}
-                            <td className="px-4 py-3 text-center bg-gray-100">
-                              <span className="text-sm font-bold text-gray-900">
-                                {userTotal}
-                              </span>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                      {/* Fila de totales */}
-                      <tr className="bg-gray-100 border-t-2 border-gray-300">
-                        <td className="px-4 py-3 text-sm font-bold text-gray-900 sticky left-0 bg-gray-100">
-                          Total
-                        </td>
-                        {weekDays.map((day, dayIndex) => {
-                          const dayStr = format(day, 'yyyy-MM-dd')
-                          const dayTotal = dayTotals.get(dayStr) || 0
-                          
-                          return (
-                            <td 
-                              key={dayIndex}
-                              className="px-3 py-3 text-center"
+                          {weekDays.map((day, index) => (
+                            <th
+                              key={index}
+                              className="px-3 py-3 lg:py-4 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider min-w-[60px] lg:min-w-[80px]"
                             >
-                              <span className="text-sm font-bold text-gray-900">
-                                {dayTotal}
-                              </span>
-                            </td>
+                              {dayLabels[index]}
+                              <div className="text-[10px] font-normal text-gray-500 mt-0.5">
+                                {format(day, 'd/M')}
+                              </div>
+                            </th>
+                          ))}
+                          <th className="px-4 py-3 lg:py-4 text-center text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-100">
+                            Total
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedUsers.map((user, userIndex) => {
+                          const userBookings = bookingsMap.get(user.id) || new Map()
+                          const userTotal = userTotals.get(user.id) || 0
+                          const userName = user.full_name || user.email?.split('@')[0] || 'Usuario'
+
+                          return (
+                            <tr
+                              key={user.id}
+                              className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${userIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                                }`}
+                            >
+                              <td className="px-4 py-3 lg:py-4 text-sm font-medium text-gray-900 sticky left-0 bg-inherit">
+                                <span className="lg:flex lg:items-center lg:gap-2">
+                                  <span
+                                    className="hidden lg:inline-flex w-7 h-7 rounded-full items-center justify-center text-[10px] font-semibold text-white flex-shrink-0 shadow-sm"
+                                    style={{
+                                      background: `radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 45%), ${getFaceHashColor(user.id || user.email || userName)}`,
+                                    }}
+                                  >
+                                    {getProfileInitials(user)}
+                                  </span>
+                                  {userName}
+                                </span>
+                              </td>
+                              {weekDays.map((day, dayIndex) => {
+                                const dayStr = format(day, 'yyyy-MM-dd')
+                                const hasBooking = userBookings.has(dayStr)
+
+                                return (
+                                  <td
+                                    key={dayIndex}
+                                    className="px-3 py-3 text-center"
+                                  >
+                                    {hasBooking ? (
+                                      <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-green-500 text-white text-xs font-bold">
+                                        ✓
+                                      </div>
+                                    ) : (
+                                      <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-gray-100 text-gray-400 text-xs">
+                                        —
+                                      </div>
+                                    )}
+                                  </td>
+                                )
+                              })}
+                              <td className="px-4 py-3 text-center bg-gray-100">
+                                <span className="text-sm font-bold text-gray-900">
+                                  {userTotal}
+                                </span>
+                              </td>
+                            </tr>
                           )
                         })}
-                        <td className="px-4 py-3 text-center bg-gray-200">
-                          <span className="text-sm font-bold text-gray-900">
-                            {grandTotal}
-                          </span>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+                        {/* Fila de totales */}
+                        <tr className="bg-gray-100 border-t-2 border-gray-300">
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 sticky left-0 bg-gray-100">
+                            Total
+                          </td>
+                          {weekDays.map((day, dayIndex) => {
+                            const dayStr = format(day, 'yyyy-MM-dd')
+                            const dayTotal = dayTotals.get(dayStr) || 0
+
+                            return (
+                              <td
+                                key={dayIndex}
+                                className="px-3 py-3 text-center"
+                              >
+                                <span className="text-sm font-bold text-gray-900">
+                                  {dayTotal}
+                                </span>
+                              </td>
+                            )
+                          })}
+                          <td className="px-4 py-3 text-center bg-gray-200">
+                            <span className="text-sm font-bold text-gray-900">
+                              {grandTotal}
+                            </span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
               </>
             )
           })()}
@@ -2462,6 +2321,7 @@ export default function AdminPage() {
         onClose={() => {
           setShowWaitlistModal(false)
           setBookingToWaitlist(null)
+          setWaitlistReason('')
         }}
         onConfirm={confirmWaitlistBooking}
         title="Devolver a la Lista de Espera"
@@ -2474,7 +2334,21 @@ export default function AdminPage() {
         cancelText="Cancelar"
         loading={processing}
         confirmButtonClass="bg-purple-600 hover:bg-purple-700"
-      />
+      >
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">
+            Motivo <span className="text-gray-400 font-normal">(opcional)</span>
+          </label>
+          <textarea
+            rows={3}
+            value={waitlistReason}
+            onChange={(e) => setWaitlistReason(e.target.value)}
+            placeholder="Ej: No hay plazas disponibles para ese día..."
+            className="w-full px-3 py-2 border border-gray-300 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 resize-none transition-colors"
+          />
+          <p className="mt-1 text-xs text-gray-500">El usuario recibirá una notificación con este motivo.</p>
+        </div>
+      </ConfirmModal>
     </div>
   )
 }

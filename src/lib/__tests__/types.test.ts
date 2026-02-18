@@ -20,7 +20,7 @@ describe('Tipos de datos - validación de estructura', () => {
   })
 
   it('Booking acepta todos los estados válidos', () => {
-    const statuses: BookingStatus[] = ['confirmed', 'pending', 'cancelled', 'waitlist']
+    const statuses: BookingStatus[] = ['confirmed', 'cancelled', 'waitlist']
     statuses.forEach(status => {
       const booking: Booking = {
         id: 1,
