@@ -1,6 +1,23 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3, Eye, EyeOff, Trash2, Search } from 'lucide-react'
+import { Users, Lock, Unlock, CheckCircle, Calendar, Car, Shield, User, ChevronLeft, ChevronRight, UserPlus, BarChart3, Eye, EyeOff, Trash2, Search, Download, GripVertical } from 'lucide-react'
+import ExcelJS from 'exceljs'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  rectSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { format, startOfWeek, addDays, subDays } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '../lib/supabase'
@@ -33,6 +50,41 @@ function getProfileInitials(profile: Profile) {
     return parts[0].slice(0, 2).toUpperCase()
   }
   return (parts[0][0] + parts[1][0]).toUpperCase()
+}
+
+interface SortableBookingItemProps {
+  id: number
+  booking: BookingWithSpot
+  isDraggable: boolean
+  children: (renderProps: {
+    attributes: any
+    listeners: any
+    isDraggable: boolean
+  }) => React.ReactNode
+}
+
+function SortableBookingItem({ id, booking, isDraggable, children }: SortableBookingItemProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: id, disabled: !isDraggable, data: { booking } })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : 'auto',
+    opacity: isDragging ? 0.7 : 1,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style} className={`${isDragging ? 'shadow-lg relative' : 'h-full'}`}>
+      {children({ attributes, listeners, isDraggable })}
+    </div>
+  )
 }
 
 export default function AdminPage() {
@@ -146,6 +198,94 @@ export default function AdminPage() {
     }
   }, [selectedSpotDate, activeTab, user, spots])
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+
+  const handleDragEnd = async (event: DragEndEvent, dayBookings: BookingWithSpot[]) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+
+    const oldIndex = dayBookings.findIndex(b => b.id === active.id)
+    let newIndex = dayBookings.findIndex(b => b.id === over.id)
+
+    if (oldIndex !== -1 && newIndex !== -1) {
+      let targetBooking = dayBookings[newIndex]
+
+      // Prevent moving relative to non-waitlist items
+      if (targetBooking.status !== 'waitlist') {
+        const waitlistBookings = dayBookings.filter(b => b.status === 'waitlist')
+        if (waitlistBookings.length > 0) {
+          if (oldIndex > newIndex) {
+            // Dragged above the waitlist -> move to top of waitlist
+            targetBooking = waitlistBookings[0]
+            newIndex = dayBookings.findIndex(b => b.id === targetBooking.id)
+          } else {
+            // Dragged below waitlist -> move to bottom of waitlist
+            targetBooking = waitlistBookings[waitlistBookings.length - 1]
+            newIndex = dayBookings.findIndex(b => b.id === targetBooking.id)
+          }
+          if (active.id === targetBooking.id) return
+        } else {
+          return
+        }
+      }
+
+      // Calculate a new created_at to persist the order
+      // The dayBookings are sorted by created_at ascending (older first)
+      // So if dragging moving to index matching targetBooking, we interpolate
+      let newCreatedAt: number
+
+      // If moving before targetBooking
+      if (oldIndex > newIndex) {
+        const prevBooking = newIndex > 0 ? dayBookings[newIndex - 1] : null
+        if (prevBooking && prevBooking.status === 'waitlist') {
+          newCreatedAt = (new Date(prevBooking.created_at).getTime() + new Date(targetBooking.created_at).getTime()) / 2
+        } else {
+          // It's the first waitlist item
+          newCreatedAt = new Date(targetBooking.created_at).getTime() - 1000
+        }
+      } else {
+        // If moving after targetBooking
+        const nextBooking = newIndex < dayBookings.length - 1 ? dayBookings[newIndex + 1] : null
+        if (nextBooking && nextBooking.status === 'waitlist') {
+          newCreatedAt = (new Date(targetBooking.created_at).getTime() + new Date(nextBooking.created_at).getTime()) / 2
+        } else {
+          // It's the last waitlist item
+          newCreatedAt = new Date(targetBooking.created_at).getTime() + 1000
+        }
+      }
+
+      const newDateString = new Date(newCreatedAt).toISOString()
+
+      // Optimistically update local state
+      setBookings(current =>
+        current.map(b => b.id === active.id ? { ...b, created_at: newDateString } : b)
+      )
+
+      // Update Supabase
+      try {
+        const { error: updateError } = await supabase
+          .from('bookings')
+          .update({ created_at: newDateString })
+          .eq('id', active.id)
+
+        if (updateError) throw updateError
+      } catch (err: any) {
+        console.error('Error updating drag order:', err)
+        setError('Error al guardar el nuevo orden de la lista de espera')
+        // En caso de error, la suscripción lo revertirá.
+      }
+    }
+  }
+
   // Función para cargar bookings de una semana específica (para el resumen)
   const loadBookingsForWeek = async (weekMonday: Date) => {
     setLoadingBookings(true)
@@ -161,7 +301,8 @@ export default function AdminPage() {
         .select('*')
         .gte('date', mondayString)
         .lte('date', fridayString)
-        .neq('status', 'cancelled') // Excluir canceladas
+        .lte('date', fridayString)
+        // .neq('status', 'cancelled') // Permitir canceladas para el resumen
         .order('date', { ascending: true })
 
       if (bookingsError) {
@@ -765,9 +906,15 @@ export default function AdminPage() {
 
       if (error) throw error
 
-      // La notificación in-app y push se envían automáticamente
-      // a través del Database Webhook configurado en Supabase.
-      // No llamamos a la Edge Function manualmente para evitar duplicados.
+      // Invocamos la Edge Function manualmente para asegurar el envío de notificaciones
+      // (Bypass del Webhook que puede estar fallando)
+      const { error: notifyError } = await supabase.functions.invoke('notify-booking-confirmed', {
+        body: { bookingId }
+      })
+
+      if (notifyError) {
+        console.error('Error invoking notify-booking-confirmed:', notifyError)
+      }
 
       // Cerrar el modal primero
       setShowConfirmBookingModal(false)
@@ -858,19 +1005,15 @@ export default function AdminPage() {
 
       if (error) throw error
 
-      // Enviar notificación al usuario con el motivo (si se ha indicado)
+      // Enviar notificación (Push + In-App) via Edge Function
       const reason = waitlistReason.trim()
-      const body = reason
-        ? `Tu reserva del ${formatDateDisplay(bookingToWaitlist.date)} ha sido devuelta a la lista de espera.\n**Motivo:** ${reason}`
-        : `Tu reserva del ${formatDateDisplay(bookingToWaitlist.date)} ha sido devuelta a la lista de espera.`
-
-      await supabase.from('notifications').insert({
-        user_id: bookingToWaitlist.user_id,
-        type: 'booking_waitlisted',
-        title: 'Reserva en lista de espera',
-        body,
-        data: { bookingId: bookingToWaitlist.id, date: bookingToWaitlist.date },
+      const { error: notifyError } = await supabase.functions.invoke('notify-booking-waitlisted', {
+        body: { bookingId: bookingToWaitlist.id, reason }
       })
+
+      if (notifyError) {
+        console.error('Error invoking notify-booking-waitlisted:', notifyError)
+      }
 
       // Cerrar el modal
       setShowWaitlistModal(false)
@@ -951,6 +1094,148 @@ export default function AdminPage() {
   //   }
   //   setExpandedUsers(newExpanded)
   // }
+
+
+  const exportSummaryToExcel = async () => {
+    console.log('📊 Exportando Excel con ExcelJS...', { bookings: bookings.length, profiles: profiles.length, summaryWeekMonday })
+    try {
+      if (!bookings || !profiles) {
+        alert('No hay datos para exportar')
+        return
+      }
+
+      // 1. Preparar datos
+      const weekDaysExport: Date[] = []
+      for (let i = 0; i < 5; i++) weekDaysExport.push(addDays(summaryWeekMonday, i))
+
+      const dayData = weekDaysExport.map(day => {
+        const dateStr = format(day, 'yyyy-MM-dd')
+
+        const confirmed = bookings
+          .filter(b => b.date === dateStr && b.status === 'confirmed')
+          .map(b => {
+            const profile = profiles.find(p => p.id === b.user_id)
+            return profile ? (profile.full_name || profile.email?.split('@')[0] || 'Usuario') : 'Usuario desconocido'
+          })
+
+        const confirmedSlots = [...confirmed]
+        while (confirmedSlots.length < 8) {
+          confirmedSlots.push('LIBRE')
+        }
+
+        const waitlist = bookings
+          .filter(b => b.date === dateStr && b.status === 'waitlist')
+          .map(b => {
+            const profile = profiles.find(p => p.id === b.user_id)
+            return profile ? (profile.full_name || profile.email?.split('@')[0] || 'Usuario') : 'Usuario desconocido'
+          })
+
+        return {
+          header: format(day, 'd'),
+          confirmedSlots,
+          waitlist
+        }
+      })
+
+      // 2. Crear Workbook y Worksheet
+      const workbook = new ExcelJS.Workbook()
+      const worksheet = workbook.addWorksheet('Parking')
+
+      // Definir columnas (5 columnas, ancho 20)
+      worksheet.columns = [
+        { width: 20 }, { width: 20 }, { width: 20 }, { width: 20 }, { width: 20 }
+      ]
+
+      // Estilos base
+      const borderStyle: Partial<ExcelJS.Borders> = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      }
+
+      const centerAlign: Partial<ExcelJS.Alignment> = { vertical: 'middle', horizontal: 'center' }
+
+      // 3. Escribir cabecera (Fila 1)
+      const headerRow = worksheet.getRow(1)
+      dayData.forEach((d, i) => {
+        const cell = headerRow.getCell(i + 1)
+        cell.value = d.header
+        cell.font = { name: 'Calibri', size: 14, bold: true }
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFBDD7EE' } // Light Blue
+        }
+        cell.alignment = centerAlign
+        cell.border = borderStyle
+      })
+
+      // 4. Escribir datos
+      let maxRows = 0
+      dayData.forEach(d => {
+        const totalRows = d.confirmedSlots.length + d.waitlist.length
+        if (totalRows > maxRows) maxRows = totalRows
+      })
+
+      // Filas de datos empiezan en la fila 2
+      for (let r = 0; r < maxRows; r++) {
+        const currentRow = worksheet.getRow(r + 2)
+
+        dayData.forEach((colData, colIndex) => {
+          const cell = currentRow.getCell(colIndex + 1)
+          const isConfirmedZone = r < colData.confirmedSlots.length
+          const isWaitlistZone = !isConfirmedZone && (r < colData.confirmedSlots.length + colData.waitlist.length)
+
+          if (isConfirmedZone) {
+            const text = colData.confirmedSlots[r]
+            cell.value = text
+            cell.alignment = centerAlign
+            cell.border = borderStyle
+            cell.font = { name: 'Calibri', size: 11 }
+
+            if (text === 'LIBRE') {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFA9D08E' } } // Darker Green
+            } else {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } } // Light Green
+            }
+          } else if (isWaitlistZone) {
+            const waitlistIndex = r - colData.confirmedSlots.length
+            cell.value = colData.waitlist[waitlistIndex]
+            cell.alignment = centerAlign
+            cell.border = borderStyle
+            cell.font = { name: 'Calibri', size: 11 }
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF0000' } } // Red
+          } else {
+            // Zona vacía debajo de waitlist (relleno gris si estamos en la zona de waitlist visualmente, >8)
+            // La imagen muestra gris para celdas vacías en la fila de waitlist y siguientes
+            if (r >= 8) {
+              cell.value = ''
+              cell.border = borderStyle
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } } // Grey
+            }
+          }
+        })
+      }
+
+      // 5. Descargar
+      const buffer = await workbook.xlsx.writeBuffer()
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `planificacion-parking-${format(summaryWeekMonday, 'dd-MM-yyyy')}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      console.log('✅ Excel exportado correctamente con ExcelJS')
+    } catch (err: any) {
+      console.error('❌ Error exportando Excel:', err)
+      alert(`Error al exportar: ${err.message}`)
+    }
+  }
 
   const formatDateDisplay = (dateString: string | null) => {
     if (!dateString) return 'Todas las fechas'
@@ -1713,7 +1998,7 @@ export default function AdminPage() {
                     }
 
                     // 3. Fallback: Mantener orden original (created_at ascendente)
-                    return 0
+                    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
                   })
 
                 return (
@@ -1747,95 +2032,121 @@ export default function AdminPage() {
                         <p className="text-gray-700 font-medium">No hay reservas para este día</p>
                       </div>
                     ) : (
-                      <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
-                        {dayBookings.map((booking) => {
-                          const userName = booking.user?.full_name || booking.user?.email?.split('@')[0] || 'Usuario desconocido'
+                      <DndContext
+                        sensors={sensors}
+                        collisionDetection={closestCenter}
+                        onDragEnd={(e) => handleDragEnd(e, dayBookings)}
+                      >
+                        <SortableContext items={dayBookings.map(b => b.id)} strategy={rectSortingStrategy}>
+                          <div className="space-y-3">
+                            {dayBookings.map((booking) => {
+                              const userName = booking.user?.full_name || booking.user?.email?.split('@')[0] || 'Usuario desconocido'
+                              const isDraggable = booking.status === 'waitlist'
 
-                          return (
-                            <div
-                              key={booking.id}
-                              className={`p-3 rounded-[14px] border transition-all ${booking.status === 'waitlist'
-                                ? 'border-purple-200 bg-white shadow-sm'
-                                : 'border-green-200 bg-white shadow-sm'
-                                }`}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-semibold text-gray-900 mb-1">
-                                    {userName}
-                                  </p>
-                                  {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
-                                    <div className="flex items-center gap-1.5 mb-1.5 text-orange-600">
-                                      <Users className="w-3 h-3 flex-shrink-0" strokeWidth={2} />
-                                      <span className="text-xs font-medium">
-                                        {(() => {
-                                          const names = booking.carpoolUsers!.map(
-                                            (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
-                                          )
-                                          if (names.length === 1) {
-                                            return `Con ${names[0]}`
-                                          }
-                                          if (names.length === 2) {
-                                            return `Con ${names[0]} y ${names[1]}`
-                                          }
-                                          return `Con ${names[0]} y ${names.length - 1} más`
-                                        })()}
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
-                                  <div className="flex items-center gap-1.5">
-                                    {booking.status === 'waitlist' && getWaitlistPosition(booking) && (
-                                      <span className="px-2 py-0.5 text-xs font-bold rounded-[6px] bg-purple-600 text-white">
-                                        #{getWaitlistPosition(booking)}
-                                      </span>
-                                    )}
-                                    <span
-                                      className={`inline-block px-2.5 py-1 text-xs font-semibold rounded-[6px] ${booking.status === 'confirmed'
-                                        ? 'bg-green-100 text-green-700'
-                                        : booking.status === 'waitlist'
-                                          ? 'bg-purple-100 text-purple-700'
-                                          : 'bg-purple-100 text-purple-700'
+                              return (
+                                <SortableBookingItem key={booking.id} id={booking.id} booking={booking} isDraggable={isDraggable}>
+                                  {({ attributes, listeners, isDraggable }) => (
+                                    <div
+                                      className={`p-3 rounded-[14px] border transition-all h-full ${booking.status === 'waitlist'
+                                        ? 'border-purple-200 bg-white shadow-sm'
+                                        : 'border-green-200 bg-white shadow-sm'
                                         }`}
                                     >
-                                      {booking.status === 'confirmed'
-                                        ? 'Confirmada'
-                                        : 'Lista de espera'}
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="flex-1 min-w-0 flex items-start gap-2">
+                                          {isDraggable && (
+                                            <div
+                                              {...attributes}
+                                              {...listeners}
+                                              className="mt-0.5 cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 transition-colors shrink-0"
+                                              title="Arrastrar para ordenar"
+                                              style={{ touchAction: 'none' }}
+                                            >
+                                              <GripVertical className="w-4 h-4" />
+                                            </div>
+                                          )}
+                                          <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-semibold text-gray-900 mb-1">
+                                              {userName}
+                                            </p>
+                                            {booking.carpoolUsers && booking.carpoolUsers.length > 0 && (
+                                              <div className="flex items-center gap-1.5 mb-1.5 text-orange-600">
+                                                <Users className="w-3 h-3 flex-shrink-0" strokeWidth={2} />
+                                                <span className="text-xs font-medium">
+                                                  {(() => {
+                                                    const names = booking.carpoolUsers!.map(
+                                                      (u) => u.full_name || u.email?.split('@')[0] || 'otro usuario'
+                                                    )
+                                                    if (names.length === 1) {
+                                                      return `Con ${names[0]}`
+                                                    }
+                                                    if (names.length === 2) {
+                                                      return `Con ${names[0]} y ${names[1]}`
+                                                    }
+                                                    return `Con ${names[0]} y ${names.length - 1} más`
+                                                  })()}
+                                                </span>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
 
-                              <div className="mt-3 pt-3 border-t border-gray-100">
-                                {booking.status === 'waitlist' ? (
-                                  <button
-                                    onClick={() => handleConfirmBooking(booking)}
-                                    className="w-full px-3 py-2 rounded-[10px] font-medium text-xs transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5 text-white"
-                                    style={{
-                                      backgroundColor: '#34C759',
-                                    }}
-                                  >
-                                    <CheckCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
-                                    Aceptar
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => handleWaitlistBooking(booking)}
-                                    className="w-full px-3 py-2 rounded-[10px] font-medium text-xs transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5 text-white"
-                                    style={{
-                                      backgroundColor: '#AF52DE',
-                                    }}
-                                  >
-                                    <UserPlus className="w-3.5 h-3.5" strokeWidth={2.5} />
-                                    Devolver a la lista de espera
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
+                                        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                                          <div className="flex items-center gap-1.5">
+                                            {booking.status === 'waitlist' && getWaitlistPosition(booking) && (
+                                              <span className="px-2 py-0.5 text-xs font-bold rounded-[6px] bg-purple-600 text-white">
+                                                #{getWaitlistPosition(booking)}
+                                              </span>
+                                            )}
+                                            <span
+                                              className={`inline-block px-2.5 py-1 text-xs font-semibold rounded-[6px] ${booking.status === 'confirmed'
+                                                ? 'bg-green-100 text-green-700'
+                                                : booking.status === 'waitlist'
+                                                  ? 'bg-purple-100 text-purple-700'
+                                                  : 'bg-purple-100 text-purple-700'
+                                                }`}
+                                            >
+                                              {booking.status === 'confirmed'
+                                                ? 'Confirmada'
+                                                : 'Lista de espera'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="mt-3 pt-3 border-t border-gray-100">
+                                        {booking.status === 'waitlist' ? (
+                                          <button
+                                            onClick={() => handleConfirmBooking(booking)}
+                                            className="w-full px-3 py-2 rounded-[10px] font-medium text-xs transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5 text-white"
+                                            style={{
+                                              backgroundColor: '#34C759',
+                                            }}
+                                          >
+                                            <CheckCircle className="w-3.5 h-3.5" strokeWidth={2.5} />
+                                            Aceptar
+                                          </button>
+                                        ) : (
+                                          <button
+                                            onClick={() => handleWaitlistBooking(booking)}
+                                            className="w-full px-3 py-2 rounded-[10px] font-medium text-xs transition-all duration-200 active:scale-95 flex items-center justify-center gap-1.5 text-white"
+                                            style={{
+                                              backgroundColor: '#AF52DE',
+                                            }}
+                                          >
+                                            <UserPlus className="w-3.5 h-3.5" strokeWidth={2.5} />
+                                            Devolver a la lista de espera
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+                                </SortableBookingItem>
+                              )
+                            })}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
                     )}
                   </div>
                 )
@@ -1870,7 +2181,7 @@ export default function AdminPage() {
                   <p className="text-gray-700 font-medium">No hay reservas activas</p>
                 </div>
               ) : (
-                <div className="space-y-3 lg:grid lg:grid-cols-2 lg:gap-4 lg:space-y-0">
+                <div className="space-y-3">
                   {bookings
                     .filter(b => {
                       if (b.status === 'cancelled') return false
@@ -2057,8 +2368,9 @@ export default function AdminPage() {
 
             // Procesar reservas confirmadas de la semana
             // Filtrar y procesar todas las reservas confirmadas
-            const confirmedBookings = bookings.filter(b => {
-              if (b.status !== 'confirmed') return false
+            // Filtrar y procesar reservas confirmadas Y canceladas
+            const visibleBookings = bookings.filter(b => {
+              if (b.status !== 'confirmed' && b.status !== 'cancelled') return false
               if (!b.user || b.user.role !== 'user') return false
 
               const bookingDate = new Date(b.date)
@@ -2071,9 +2383,9 @@ export default function AdminPage() {
               return bookingDate >= monday && bookingDate <= friday
             })
 
-            console.log('Reservas confirmadas para el resumen:', confirmedBookings.length, confirmedBookings)
+            console.log('Reservas visibles para el resumen:', visibleBookings.length, visibleBookings)
 
-            confirmedBookings.forEach(booking => {
+            visibleBookings.forEach(booking => {
               const userId = booking.user_id
               const dateStr = booking.date
 
@@ -2081,17 +2393,35 @@ export default function AdminPage() {
                 bookingsMap.set(userId, new Map())
               }
               // Si ya existe una reserva para este usuario y día, mantener la más reciente
+              // Ojo: si hay una confirmada y una cancelada, idealmente mostrar la confirmada si es válida?
+              // Pero normalmente una cancelada es la última acción.
+              // Si hay duplicados, nos quedamos con la última por fecha de creación (updated_at/created_at)
               const existingBooking = bookingsMap.get(userId)!.get(dateStr)
-              if (!existingBooking || new Date(booking.created_at) > new Date(existingBooking.created_at)) {
+
+              const isNewer = !existingBooking || new Date(booking.created_at) > new Date(existingBooking.created_at)
+
+              if (isNewer) {
                 bookingsMap.get(userId)!.set(dateStr, booking)
               }
 
-              // Añadir usuario a la lista de usuarios con reservas
+              // Añadir usuario a la lista si tiene alguna reserva (confirmada o cancelada)
               usersWithBookings.add(userId)
 
-              // Incrementar total del día
-              const currentTotal = dayTotals.get(dateStr) || 0
-              dayTotals.set(dateStr, currentTotal + 1)
+              // Incrementar total del día SOLO si está confirmada
+              // Y solo si esta reserva es la que "gana" (la que se muestra)
+              // Esto es complejo porque primero procesamos y luego contamos. 
+              // Mejor contar al final iterando el mapa.
+            })
+
+            // Recalcular totales iterando el mapa final para evitar dobles conteos o contar sobreescritos
+            bookingsMap.forEach((userBookings) => {
+              userBookings.forEach((booking) => {
+                if (booking.status === 'confirmed') {
+                  const dateStr = booking.date
+                  const currentTotal = dayTotals.get(dateStr) || 0
+                  dayTotals.set(dateStr, currentTotal + 1)
+                }
+              })
             })
 
             // Obtener usuarios normales (no directivos, no admins) que tienen reservas O todos los usuarios verificados
@@ -2103,17 +2433,21 @@ export default function AdminPage() {
               const profile = profiles.find(p => p.id === userId)
               if (profile) return profile
               // Si no está en profiles, crear un perfil temporal con la info de la reserva
-              const booking = confirmedBookings.find(b => b.user_id === userId)
+              const booking = visibleBookings.find(b => b.user_id === userId)
               if (booking && booking.user) {
                 return booking.user
               }
               return null
             }).filter((u): u is Profile => u !== null)
 
-            // Calcular totales por usuario
+            // Calcular totales por usuario (SOLO confirmadas)
             const userTotals = new Map<string, number>()
             bookingsMap.forEach((userBookings, userId) => {
-              userTotals.set(userId, userBookings.size)
+              let count = 0
+              userBookings.forEach(b => {
+                if (b.status === 'confirmed') count++
+              })
+              userTotals.set(userId, count)
             })
 
             // Ordenar usuarios alfabéticamente por nombre completo o email
@@ -2180,7 +2514,11 @@ export default function AdminPage() {
                               className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${userIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                                 }`}
                             >
-                              <td className="px-4 py-3 lg:py-4 text-sm font-medium text-gray-900 sticky left-0 bg-inherit">
+                              <td
+                                className="px-4 py-3 lg:py-4 text-sm font-medium text-gray-900 sticky left-0 bg-inherit cursor-pointer hover:text-orange-600 transition-colors group"
+                                onClick={() => navigate(`/profile/${user.id}`)}
+                                title="Ver perfil del usuario"
+                              >
                                 <span className="lg:flex lg:items-center lg:gap-2">
                                   <span
                                     className="hidden lg:inline-flex w-7 h-7 rounded-full items-center justify-center text-[10px] font-semibold text-white flex-shrink-0 shadow-sm"
@@ -2190,7 +2528,7 @@ export default function AdminPage() {
                                   >
                                     {getProfileInitials(user)}
                                   </span>
-                                  {userName}
+                                  <span className="group-hover:underline">{userName}</span>
                                 </span>
                               </td>
                               {weekDays.map((day, dayIndex) => {
@@ -2203,9 +2541,17 @@ export default function AdminPage() {
                                     className="px-3 py-3 text-center"
                                   >
                                     {hasBooking ? (
-                                      <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-green-500 text-white text-xs font-bold">
-                                        ✓
-                                      </div>
+                                      <>
+                                        {userBookings.get(dayStr)?.status === 'cancelled' ? (
+                                          <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-red-100 text-red-500 text-xs font-bold" title="Cancelada">
+                                            ✕
+                                          </div>
+                                        ) : (
+                                          <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-green-500 text-white text-xs font-bold">
+                                            ✓
+                                          </div>
+                                        )}
+                                      </>
                                     ) : (
                                       <div className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] bg-gray-100 text-gray-400 text-xs">
                                         —
@@ -2251,6 +2597,17 @@ export default function AdminPage() {
                       </tbody>
                     </table>
                   </div>
+                </div>
+                {/* Botón exportar Excel */}
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={exportSummaryToExcel}
+                    className="flex items-center gap-2 px-4 py-2 rounded-[12px] bg-green-600 hover:bg-green-700 text-white text-sm font-semibold transition-colors active:scale-95"
+                    title="Descargar Excel"
+                  >
+                    <Download className="w-4 h-4" />
+                    Exportar Excel
+                  </button>
                 </div>
               </>
             )
